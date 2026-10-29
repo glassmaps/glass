@@ -32,7 +32,7 @@ async function withRetry<T>(run: () => Promise<Response>, parse: (r: Response) =
 }
 
 let rid = 0;
-export async function rpc<T>(method: string, params: unknown): Promise<T> {
+export async function rpc<T>(method: string, params: unknown, tries = 4): Promise<T> {
   const body = JSON.stringify({ jsonrpc: "2.0", id: ++rid, method, params });
   return withRetry(
     () => fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body, cache: "no-store" }),
@@ -41,6 +41,7 @@ export async function rpc<T>(method: string, params: unknown): Promise<T> {
       if (j.error) throw new UpstreamError(400, `${method}: ${j.error.message}`);
       return j.result as T;
     },
+    tries,
   );
 }
 
@@ -201,7 +202,7 @@ interface GtfaPage {
   paginationToken: string | null;
 }
 
-const gtfa = (address: string, filters: Record<string, unknown>, limit = 1) =>
+const gtfa = (address: string, filters: Record<string, unknown>, limit = 1, tries = 4) =>
   rpc<GtfaPage>("getTransactionsForAddress", [
     address,
     {
@@ -212,7 +213,7 @@ const gtfa = (address: string, filters: Record<string, unknown>, limit = 1) =>
       limit,
       filters: { status: "succeeded", ...filters },
     },
-  ]);
+  ], tries);
 
 /** The wallet that paid for the mint's first transaction. */
 export async function deployerOf(mint: string): Promise<string | null> {
@@ -222,8 +223,8 @@ export async function deployerOf(mint: string): Promise<string | null> {
 }
 
 /** The first transaction in which `owner` received `mint`, read into the facts we compare across holders. */
-export async function firstIn(owner: string, mint: string): Promise<FirstIn | null> {
-  const r = await gtfa(owner, { tokenAccounts: "balanceChanged", tokenTransfer: { mint, direction: "in" } });
+export async function firstIn(owner: string, mint: string, tries = 4): Promise<FirstIn | null> {
+  const r = await gtfa(owner, { tokenAccounts: "balanceChanged", tokenTransfer: { mint, direction: "in" } }, 1, tries);
   const tx = r.data?.[0];
   return tx ? readFirstIn(tx, owner, mint) : null;
 }

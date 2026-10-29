@@ -19,13 +19,14 @@ interface Recent {
   score: number;
 }
 
-export function Search({ autoFocus }: { autoFocus?: boolean }) {
+export function Search({ autoFocus, id = "ca", recent: showRecent = true }: { autoFocus?: boolean; id?: string; recent?: boolean }) {
   const router = useRouter();
   const [v, setV] = useState("");
   const [err, setErr] = useState("");
   const [recent, setRecent] = useState<Recent[] | null>(null);
 
   useEffect(() => {
+    if (!showRecent) return;
     let live = true;
     fetch("/api/recent")
       .then((r) => (r.ok ? r.json() : { items: [] }))
@@ -34,7 +35,7 @@ export function Search({ autoFocus }: { autoFocus?: boolean }) {
     return () => {
       live = false;
     };
-  }, []);
+  }, [showRecent]);
 
   const go = (raw: string) => {
     const a = pickAddress(raw);
@@ -57,14 +58,14 @@ export function Search({ autoFocus }: { autoFocus?: boolean }) {
         }}
       >
         <SearchIcon size={18} />
-        <label className="sr" htmlFor="ca">Token address</label>
+        <label className="sr" htmlFor={id}>Token address</label>
         <input
-          id="ca"
+          id={id}
           autoFocus={autoFocus}
           spellCheck={false}
           autoComplete="off"
           autoCapitalize="off"
-          placeholder="Paste a token address or link"
+          placeholder="Paste a CA or a pump.fun link"
           value={v}
           onChange={(e) => {
             setV(e.target.value);
@@ -82,7 +83,7 @@ export function Search({ autoFocus }: { autoFocus?: boolean }) {
         <button className="btn btn-acc" type="submit" disabled={!v.trim()}>Map it</button>
       </form>
       {err && <p className="search-err" role="alert">{err}</p>}
-      <div className="tries">
+      {showRecent && <div className="tries">
         {recent && recent.length > 0 && <span className="micro">Mapped recently</span>}
         {recent?.slice(0, 6).map((r) => (
           <a key={r.mint} className="chip" href={`/t/${r.mint}`}>
@@ -91,7 +92,7 @@ export function Search({ autoFocus }: { autoFocus?: boolean }) {
             <span className="sc num">{r.score}</span>
           </a>
         ))}
-      </div>
+      </div>}
     </div>
   );
 }

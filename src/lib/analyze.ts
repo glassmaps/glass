@@ -119,20 +119,40 @@ export async function analyze(mint: string, onStage: (s: Stage) => void = () => 
   done = 0;
   const faKeys = people.map((n) => `fa:${mint}:${n.id}`);
   const faHits = await cache.getMany<{ t: FirstIn | null }>(faKeys);
-  let firstMissing = 0;
+  const retry: number[] = [];
+  let limited = false;
+  const readFirst = async (i: number, tries: number) => {
+    const n = people[i];
+    n.first = await firstIn(n.id, mint, tries);
+    if (n.first) await cache.set(faKeys[i], { t: n.first });
+  };
   await mapLimit(people, limits.concurrency, async (n, i) => {
     if (faHits[i]) n.first = faHits[i]!.t;
     else {
       try {
-        n.first = await firstIn(n.id, mint);
-        if (n.first) await cache.set(faKeys[i], { t: n.first });
-      } catch {
-        firstMissing++;
+        await readFirst(i, 3);
+      } catch (e) {
+        if (e instanceof UpstreamError && e.status === 429) limited = true;
+        retry.push(i);
       }
+    }
+    if (!retry.includes(i)) onStage({ stage: "first", done: ++done, total: people.length });
+  });
+  // a plan's rate limit is the usual reason a read fails: go again, slowly, while the request still has time
+  let firstMissing = 0;
+  await mapLimit(retry, 2, async (i) => {
+    if (Date.now() - t0 > 38_000) { firstMissing++; return; }
+    try {
+      await readFirst(i, 6);
+    } catch {
+      firstMissing++;
     }
     onStage({ stage: "first", done: ++done, total: people.length });
   });
-  if (firstMissing) notes.push(`First buys could not be read for ${firstMissing} of ${people.length} wallets; they are left out of cohorts.`);
+  if (firstMissing)
+    notes.push(
+      `First buys could not be read for ${firstMissing} of ${people.length} wallets${limited ? ", because the data key on this deployment hit its plan's rate limit" : ""}; they are left out of cohorts. Rescan to try them again.`,
+    );
 
   onStage({ stage: "layout" });
   markFresh(nodes);

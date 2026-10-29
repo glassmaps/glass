@@ -35,7 +35,7 @@ export async function handleScan(req: Request, mint: string, opts: { cors?: bool
   if (hit) {
     const age = Math.round((Date.now() - hit.scannedAt) / 1000);
     if (url.searchParams.get("stream") === "1") {
-      return new Response(JSON.stringify({ done: hit }) + "\n", { headers: { "content-type": "application/x-ndjson", ...cors } });
+      return new Response(JSON.stringify({ result: hit }) + "\n", { headers: { "content-type": "application/x-ndjson", ...cors } });
     }
     return json(hit, 200, { ...cors, "cache-control": `public, s-maxage=${Math.max(5, limits.scanTtl - age)}, stale-while-revalidate=300`, age: String(age) });
   }
@@ -54,7 +54,7 @@ export async function handleScan(req: Request, mint: string, opts: { cors?: bool
     }
   }
 
-  // NDJSON: one line per stage, the last line carries the map or the error
+  // NDJSON: one line per stage ({ stage, done, total }), the last line is { result } or { error }
   const enc = new TextEncoder();
   const body = new ReadableStream({
     async start(ctl) {
@@ -68,7 +68,7 @@ export async function handleScan(req: Request, mint: string, opts: { cors?: bool
         send(s);
       };
       try {
-        send({ done: await analyze(mint, onStage) });
+        send({ result: await analyze(mint, onStage) });
       } catch (e) {
         const err = e instanceof ScanError ? e : new ScanError("upstream", "The scan failed upstream. Try again in a moment.");
         if (!(e instanceof ScanError)) console.error("scan", mint, e);

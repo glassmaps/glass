@@ -52,7 +52,7 @@ Tests: `npm test`. Types: `npm run lint`.
 GET /api/v1/map/{mint}
 ```
 
-Returns the map as JSON, open CORS, no key. Cached maps are served for 90 seconds. Uncached scans are limited per IP and per day. Add `?stream=1` for NDJSON progress lines followed by the result.
+Returns the map as JSON, open CORS, no key. Cached maps are served for 90 seconds. Uncached scans are limited per IP and per day. Add `?stream=1` for NDJSON: progress lines `{ "stage", "done", "total" }`, then one `{ "result": map }` or `{ "error": { "code", "message" } }`.
 
 ## Cost
 

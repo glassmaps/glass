@@ -1,5 +1,10 @@
 import type { Metadata } from "next";
 import { Footer, Header } from "@/components/chrome";
+import { Reveal } from "@/components/reveal";
+import { DocNav } from "@/components/doc-nav";
+import { CohortReplay } from "@/components/cohort-replay";
+import { ScoreSim } from "@/components/score-sim";
+import { Funded, SameFunder, Together, Transfer } from "@/components/diagrams";
 import { BANDS, limits, METHOD_VERSION, rules, SCORE_RULES, site } from "@/config/site";
 
 export const metadata: Metadata = {
@@ -14,107 +19,236 @@ function Src({ file, children }: { file: string; children: React.ReactNode }) {
   return href ? <a href={href} target="_blank" rel="noreferrer">{children}</a> : <code>{file}</code>;
 }
 
+const NAV = [
+  { id: "scan", label: "The scan" },
+  { id: "links", label: "Links" },
+  { id: "cohorts", label: "Cohorts" },
+  { id: "fresh", label: "Fresh wallets" },
+  { id: "score", label: "Score" },
+  { id: "labels", label: "Labels" },
+  { id: "limits", label: "Limits" },
+  { id: "source", label: "Source" },
+];
+
+const hrs = rules.freshWindowSec / 3600;
+const W = limits.holders;
+
+// Helius credits for one fresh scan of the top holders: what every step costs, in the same units the bill uses
+const COST = [
+  { k: "Funding sources", v: W * 100, note: `${W} × funded-by at 100 credits`, c: "var(--c2)" },
+  { k: "First buys", v: W * 10, note: `${W} × getTransactionsForAddress at 10`, c: "var(--c1)" },
+  { k: "Names", v: Math.ceil(W / 100) * 100, note: "1 × batch-identity per 100 wallets", c: "var(--c3)" },
+  { k: "Token and holders", v: 10 * (2 + limits.holderPages), note: `getAsset, deployer and up to ${limits.holderPages} holder pages at 10`, c: "var(--c4)" },
+];
+const COST_TOTAL = COST.reduce((s, c) => s + c.v, 0);
+
+const STEPS = [
+  { n: "01", t: "Token", call: "getAsset", d: "Name, symbol, decimals, supply." },
+  { n: "02", t: "Holders", call: "getTokenAccounts", d: `Every token account, summed per owner. Up to ${(limits.holderPages * 1000).toLocaleString("en-US")} accounts; the top ${W} are mapped.` },
+  { n: "03", t: "Funding", call: "funded-by", d: "The first SOL each wallet ever received. Cached forever: it cannot change." },
+  { n: "04", t: "First buy", call: "getTransactionsForAddress", d: "The first transaction that brought this token in: slot, payer, tip, size, source." },
+  { n: "05", t: "Rules", call: "src/lib/graph.ts", d: "Links, clusters, cohorts and the score. No model, no hand labels." },
+];
+
 export default function Method() {
   return (
     <>
       <Header at="method" />
-      <main className="wrap doc">
-        <nav className="doc-nav" aria-label="On this page">
-          <span className="micro" style={{ marginBottom: 10 }}>Method {METHOD_VERSION}</span>
-          <a href="#read">What we read</a>
-          <a href="#links">Links</a>
-          <a href="#cohorts">Cohorts</a>
-          <a href="#labels">Labels</a>
-          <a href="#score">Score</a>
-          <a href="#limits">Limits</a>
-          <a href="#source">Source</a>
-        </nav>
-        <article className="doc-body">
-          <h1 className="h-display" style={{ fontSize: "clamp(36px, 5vw, 64px)" }}>The method</h1>
-          <p>
-            This page is generated from the same constants the scanner runs on. If a number here changes, the method version changes with it, and old
-            maps are not mixed with new ones.
-          </p>
+      <Reveal />
+      <main>
+        <section className="m-hero">
+          <div className="wrap">
+            <span className="idx micro">Method {METHOD_VERSION} · generated from the scanner&apos;s own constants</span>
+            <h1 className="h-display">The method.</h1>
+            <p className="lede">
+              Everything Glass decides, and the exact number it decides with. If a number on this page changes, the method version changes with it and
+              old maps are never mixed with new ones.
+            </p>
+            <dl className="m-facts">
+              <div><dt className="micro">Link rules</dt><dd className="num">3</dd></div>
+              <div><dt className="micro">Cohort signals</dt><dd className="num">4</dd></div>
+              <div><dt className="micro">Score inputs</dt><dd className="num">{SCORE_RULES.length}</dd></div>
+              <div><dt className="micro">Labels typed by hand</dt><dd className="num">0</dd></div>
+            </dl>
+          </div>
+        </section>
 
-          <h2 id="read">What we read</h2>
-          <p>For any Solana token, from the chain, through Helius:</p>
-          <ul>
-            <li>Every token account of the mint (<code>getTokenAccounts</code>), summed per owner. Up to {(limits.holderPages * 1000).toLocaleString("en-US")} accounts per scan; beyond that the holder count is marked as a lower bound. The top {limits.holders} owners are mapped.</li>
-            <li>Owners that are program-derived addresses (no private key, off the ed25519 curve) are bonding curves, pool vaults or lockers. They are drawn as dashed rings and never linked or scored.</li>
-            <li>For each wallet: the first SOL it ever received (<code>/v1/wallet/:address/funded-by</code>) and the first transaction in which it received this token (<code>getTransactionsForAddress</code>, oldest first, filtered to this mint).</li>
-            <li>The deployer: the fee payer of the mint&apos;s first transaction.</li>
-          </ul>
+        <div className="wrap doc">
+          <DocNav items={NAV} version={METHOD_VERSION} />
+          <article className="doc-body">
+            <section id="scan" className="m-sec">
+              <span className="idx micro">01</span>
+              <h2>The scan</h2>
+              <p>Five reads, in order. Each step streams to the page while it runs, so you watch the map being built instead of waiting on a spinner.</p>
+              <ol className="pipe" data-reveal>
+                {STEPS.map((s, i) => (
+                  <li key={s.n} style={{ ["--i" as string]: i }}>
+                    <span className="pipe-n num">{s.n}</span>
+                    <b>{s.t}</b>
+                    <code>{s.call}</code>
+                    <p>{s.d}</p>
+                  </li>
+                ))}
+              </ol>
 
-          <h2 id="links">Links</h2>
-          <p>A line between two bubbles has exactly one of three causes. Each carries the transaction signature that proves it.</p>
-          <table className="doc-tbl">
-            <thead><tr><th>Link</th><th>Rule</th></tr></thead>
-            <tbody>
-              <tr><td>Funded</td><td>A top holder (or the deployer) sent another top holder its first SOL.</td></tr>
-              <tr><td>Same funder</td><td>{rules.sharedFunderMin}+ top holders share the wallet that sent their first SOL, and that wallet has no known name or type. Exchanges, bridges and protocols are excluded because they fund unrelated people all day.</td></tr>
-              <tr><td>Token transfer</td><td>A holder&apos;s first tokens came out of another holder&apos;s wallet (not a pool, curve or other program) in the same transaction.</td></tr>
-            </tbody>
-          </table>
-          <p>Linked wallets form a cluster. A cluster that contains the deployer, or a wallet the deployer funded, is marked as the deployer&apos;s.</p>
+              <figure className="cost" data-reveal>
+                <figcaption>
+                  <span className="micro">Cost of one fresh scan</span>
+                  <span className="cost-total num">{COST_TOTAL.toLocaleString("en-US")} <small>Helius credits</small></span>
+                </figcaption>
+                <div className="cost-bar" aria-hidden>
+                  {COST.map((c, i) => (
+                    <i key={c.k} style={{ width: `${(c.v / COST_TOTAL) * 100}%`, background: c.c, ["--i" as string]: i }} />
+                  ))}
+                </div>
+                <ul>
+                  {COST.map((c) => (
+                    <li key={c.k}>
+                      <i style={{ background: c.c }} />
+                      <span>{c.k}</span>
+                      <span className="cost-note">{c.note}</span>
+                      <span className="num">{c.v.toLocaleString("en-US")}</span>
+                    </li>
+                  ))}
+                </ul>
+                <p>A rescan of a known token costs a fraction of this: funding and first buys are stored permanently, only new holders are read.</p>
+              </figure>
+            </section>
 
-          <h2 id="cohorts">Cohorts</h2>
-          <p>
-            Bundlers spread SOL through fresh wallets so no transfer ever joins them. What they cannot hide is timing and habit. A cohort is {rules.cohortMinSize} or more
-            wallets whose first buys land within {rules.cohortSlotWindow + 1} slots of each other. It is then rated by what else they share:
-          </p>
-          <table className="doc-tbl">
-            <thead><tr><th>Signal</th><th>Threshold</th></tr></thead>
-            <tbody>
-              <tr><td>One fee payer</td><td>One wallet paid the fee for 2+ of the buys. Alone this makes a cohort high confidence.</td></tr>
-              <tr><td>Same size</td><td>SOL spent spreads less than {Math.round(rules.cohortSizeSpread * 100)}% of the median.</td></tr>
-              <tr><td>Same Jito tip</td><td>Half or more paid an identical tip to a Jito tip account.</td></tr>
-              <tr><td>Fresh wallets</td><td>Half or more were funded less than {rules.freshWindowSec / 3600}h before their first buy.</td></tr>
-            </tbody>
-          </table>
-          <p>Confidence is high with a shared fee payer or two signals, medium with one, low with timing alone. Low cohorts are shown but never scored.</p>
+            <section id="links" className="m-sec">
+              <span className="idx micro">02</span>
+              <h2>Links</h2>
+              <p>A line between two bubbles has exactly one of three causes, and each carries the transaction signature that proves it. Linked wallets form a cluster. A cluster that contains the deployer, or a wallet the deployer funded, is marked as the deployer&apos;s.</p>
+              <div className="m-rules" data-reveal>
+                {[
+                  { n: "Funded", art: <Funded />, t: "A top holder, or the deployer, sent another top holder its first SOL." },
+                  { n: "Same funder", art: <SameFunder />, t: `${rules.sharedFunderMin}+ top holders got their first SOL from one wallet with no known name or type. Exchanges, bridges and protocols are excluded: they fund unrelated people all day.` },
+                  { n: "Token transfer", art: <Transfer />, t: "A holder's first tokens came out of another holder's wallet, not a pool, curve or other program, in the same transaction." },
+                ].map((r) => (
+                  <div className="m-rule" key={r.n}>
+                    <div className="card-art">{r.art}</div>
+                    <div>
+                      <h3>{r.n}</h3>
+                      <p>{r.t}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
 
-          <h2 id="labels">Labels</h2>
-          <ul>
-            <li><b>Known entity</b>: names from Helius&apos; identity database (exchanges, protocols, market makers). Exchange wallets never join a cluster.</li>
-            <li><b>Labeled by the project</b>: only on $GLASS itself, where we label our own team, marketing and fee wallets. Shown with who set it.</li>
-            <li><b>Rule</b>: Deployer, Burned, Program account. Derived, never typed by hand.</li>
-          </ul>
+            <section id="cohorts" className="m-sec">
+              <span className="idx micro">03</span>
+              <h2>Cohorts</h2>
+              <p>
+                Bundlers spread SOL through fresh wallets so no transfer ever joins them. What they cannot hide is timing and habit. A cohort is{" "}
+                {rules.cohortMinSize} or more wallets whose first buys land within {rules.cohortSlotWindow + 1} slots of each other.
+              </p>
+              <CohortReplay />
+              <table className="doc-tbl">
+                <thead><tr><th>Signal</th><th>Counts when</th></tr></thead>
+                <tbody>
+                  <tr><td>One fee payer</td><td>One wallet paid the fee for 2+ of the buys. On its own this makes a cohort high confidence.</td></tr>
+                  <tr><td>Same size</td><td>SOL spent spreads less than {Math.round(rules.cohortSizeSpread * 100)}% of the median.</td></tr>
+                  <tr><td>Same Jito tip</td><td>Half or more paid an identical tip to a Jito tip account.</td></tr>
+                  <tr><td>Fresh wallets</td><td>Half or more were funded less than {hrs}h before their first buy.</td></tr>
+                </tbody>
+              </table>
+              <div className="conf-grid">
+                <div><span className="conf conf-high">high</span><p>A shared fee payer, or two signals.</p></div>
+                <div><span className="conf conf-medium">medium</span><p>One signal.</p></div>
+                <div><span className="conf conf-low">low</span><p>Timing alone. Shown on the map, never scored.</p></div>
+              </div>
+            </section>
 
-          <h2 id="score">Score</h2>
-          <p>Starts at 100 and loses points for each signal below. Each signal is a share of total supply. The caps add up to 100.</p>
-          <div className="formula">penalty = min(max, max(0, share − free) × weight)</div>
-          <table className="doc-tbl">
-            <thead><tr><th>Signal</th><th className="r">Free</th><th className="r">Weight</th><th className="r">Max</th></tr></thead>
-            <tbody>
-              {SCORE_RULES.map((r) => (
-                <tr key={r.key}><td>{r.label}</td><td className="r">{r.free}%</td><td className="r">×{r.weight}</td><td className="r">{r.max}</td></tr>
-              ))}
-            </tbody>
-          </table>
-          <table className="doc-tbl">
-            <thead><tr><th>Band</th><th className="r">From</th></tr></thead>
-            <tbody>
-              {BANDS.map((b) => <tr key={b.band}><td>{b.label}</td><td className="r">{b.min}</td></tr>)}
-            </tbody>
-          </table>
-          <p>The score describes the holder list. It does not say a token is good or bad, and it does not accuse anyone.</p>
+            <section id="fresh" className="m-sec">
+              <span className="idx micro">04</span>
+              <h2>Fresh wallets</h2>
+              <p>A wallet is fresh when its first SOL arrived less than {hrs} hours before its first buy of the token. Real traders have history; a bundle&apos;s wallets are usually made for the launch.</p>
+              <figure className="fresh" data-reveal>
+                {[
+                  { k: "Fresh", from: 0.62, to: 0.74, note: `funded 2h 10m before buying`, hot: true },
+                  { k: "Not fresh", from: 0.08, to: 0.74, note: "funded 41 days before buying", hot: false },
+                ].map((r) => (
+                  <div className="fresh-row" key={r.k}>
+                    <span className="micro">{r.k}</span>
+                    <div className="fresh-track">
+                      <i className="fresh-win" style={{ left: "52%", width: "22%" }} />
+                      <i className={`fresh-span${r.hot ? " hot" : ""}`} style={{ left: `${r.from * 100}%`, width: `${(r.to - r.from) * 100}%` }} />
+                      <b className="fresh-pt" style={{ left: `${r.from * 100}%` }} title="first SOL in" />
+                      <b className="fresh-pt buy" style={{ left: `${r.to * 100}%` }} title="first buy" />
+                    </div>
+                    <span className="fresh-note">{r.note}</span>
+                  </div>
+                ))}
+                <div className="fresh-legend micro">
+                  <span><b className="fresh-pt" /> first SOL in</span>
+                  <span><b className="fresh-pt buy" /> first buy</span>
+                  <span><i className="fresh-win" /> {hrs}h window</span>
+                </div>
+              </figure>
+            </section>
 
-          <h2 id="limits">Limits</h2>
-          <ul>
-            <li>Only the top {limits.holders} holders are drawn and scored.</li>
-            <li>Funding is the first SOL a wallet received. A wallet funded through an exchange, then used by a bundler, does not link by funding; it can still land in a cohort.</li>
-            <li>Two-hop funding (A funds B, B funds C) is not followed yet.</li>
-            <li>A cohort is evidence of coordinated timing, not proof of one owner. Bots chasing the same launch can look alike.</li>
-            <li>Finished maps are cached for {limits.scanTtl}s. Rescan reads everything again.</li>
-          </ul>
+            <section id="score" className="m-sec">
+              <span className="idx micro">05</span>
+              <h2>Score</h2>
+              <p>
+                The score starts at 100 and loses points for each signal, measured as a share of total supply. The caps add up to 100. Move the inputs to see
+                the exact arithmetic the scanner runs.
+              </p>
+              <ScoreSim />
+              <table className="doc-tbl">
+                <thead><tr><th>Input</th><th className="r">Free</th><th className="r">Weight</th><th className="r">Max</th></tr></thead>
+                <tbody>
+                  {SCORE_RULES.map((r) => (
+                    <tr key={r.key}><td>{r.label}</td><td className="r">{r.free}%</td><td className="r">×{r.weight}</td><td className="r">{r.max}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="bands">
+                {[...BANDS].reverse().map((b, i, all) => (
+                  <div key={b.band} className={`band-cell band-${b.band}`} style={{ flexGrow: (i === all.length - 1 ? 100 : all[i + 1].min) - b.min }}>
+                    <span>{b.label}</span>
+                    <span className="num">{b.min}+</span>
+                  </div>
+                ))}
+              </div>
+              <p>The score describes a holder list. It does not say a token is good or bad, and it does not accuse anyone.</p>
+            </section>
 
-          <h2 id="source">Source</h2>
-          <p>
-            Glass is open source under the MIT license. The rules on this page live in <Src file="src/lib/graph.ts">src/lib/graph.ts</Src>, the thresholds in{" "}
-            <Src file="src/config/site.ts">src/config/site.ts</Src>, and every chain read in <Src file="src/lib/helius.ts">src/lib/helius.ts</Src>. The tests that pin each rule
-            are in <Src file="test/graph.test.ts">test/graph.test.ts</Src>.
-          </p>
-        </article>
+            <section id="labels" className="m-sec">
+              <span className="idx micro">06</span>
+              <h2>Labels</h2>
+              <div className="lab-grid">
+                <div><b>Known entity</b><p>Names from Helius&apos; identity data: exchanges, protocols, market makers. Exchange wallets never join a cluster.</p></div>
+                <div><b>Rule</b><p>Deployer, Burned, Program account. Derived from the chain, never typed by hand.</p></div>
+                <div><b>Project</b><p>Shown with who set it. A label changes the name on a bubble, never the lines around it.</p></div>
+              </div>
+            </section>
+
+            <section id="limits" className="m-sec">
+              <span className="idx micro">07</span>
+              <h2>Limits</h2>
+              <p>What Glass does not see yet, stated plainly so nobody reads more into a map than it holds.</p>
+              <ul className="limits">
+                <li>Only the top {W} holders are drawn and scored.</li>
+                <li>Funding is the first SOL a wallet received. A wallet funded through an exchange and then used by a bundler does not link by funding; it can still land in a cohort.</li>
+                <li>Two-hop funding (A funds B, B funds C) is not followed yet.</li>
+                <li>A cohort is evidence of coordinated timing, not proof of one owner. Bots chasing the same launch can look alike.</li>
+                <li>Finished maps are cached for {limits.scanTtl}s. Rescan reads everything again.</li>
+              </ul>
+            </section>
+
+            <section id="source" className="m-sec">
+              <span className="idx micro">08</span>
+              <h2>Source</h2>
+              <p>
+                Glass is open source under the MIT license. The rules on this page live in <Src file="src/lib/graph.ts">src/lib/graph.ts</Src>, the thresholds in{" "}
+                <Src file="src/config/site.ts">src/config/site.ts</Src>, every chain read in <Src file="src/lib/helius.ts">src/lib/helius.ts</Src>, and the tests that pin
+                each rule in <Src file="test/graph.test.ts">test/graph.test.ts</Src>.
+              </p>
+            </section>
+          </article>
+        </div>
       </main>
       <Footer />
     </>

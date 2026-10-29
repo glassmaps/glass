@@ -13,7 +13,7 @@ export const site = {
   x: process.env.NEXT_PUBLIC_X_URL || "",
   telegram: process.env.NEXT_PUBLIC_TELEGRAM_URL || "",
   github: process.env.NEXT_PUBLIC_GITHUB_URL || "",
-  // our own token, mapped live on the home page from minute one
+  // our own token: shown in the header with copy and pump.fun links
   tokenMint: process.env.NEXT_PUBLIC_TOKEN_MINT || "",
 };
 

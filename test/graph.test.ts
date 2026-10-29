@@ -141,3 +141,11 @@ test("readFirstIn reads payer, fee, Jito tip, SOL spent and a wallet-to-wallet s
   assert.equal(f.via, "pump.fun");
   assert.equal(f.from, giver);
 });
+
+test("stream: a progress count is never taken for the map", async () => {
+  const { readLine } = await import("../src/lib/stream");
+  assert.equal(readLine('{"stage":"funding","done":37,"total":97}').kind, "stage");
+  assert.equal(readLine('{"result":{"nodes":[],"edges":[],"clusters":[],"cohorts":[]}}').kind, "result");
+  assert.equal(readLine('{"error":{"code":"rate","message":"slow"}}').kind, "error");
+  assert.equal(readLine("  ").kind, "skip");
+});

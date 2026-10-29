@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { Edge, MapResult, Stage } from "@/lib/types";
 import { explorer } from "@/config/site";
 import { short } from "@/lib/address";
+import { readLine } from "@/lib/stream";
 import { ago, fmtAmount, fmtInt, fmtPct, fmtSol, fmtUsd, utc } from "@/lib/format";
 import { clusterColor, MapCanvas, type Layers, type Pick } from "./map-canvas";
 import { CopyButton } from "./copy";
@@ -48,11 +49,10 @@ function useScan(mint: string, initial: MapResult | null) {
           while ((i = buf.indexOf("\n")) >= 0) {
             const line = buf.slice(0, i);
             buf = buf.slice(i + 1);
-            if (!line.trim()) continue;
-            const msg = JSON.parse(line);
-            if (msg.done) setData(msg.done);
-            else if (msg.error) setErr(msg.error);
-            else setStage(msg);
+            const l = readLine(line);
+            if (l.kind === "result") setData(l.map);
+            else if (l.kind === "error") setErr(l.error);
+            else if (l.kind === "stage") setStage(l.stage);
           }
         }
       } catch (e) {
