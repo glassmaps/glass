@@ -308,3 +308,36 @@ test("a young wallet's whole history gives its funding and first buy in one read
     globalThis.fetch = real;
   }
 });
+
+test("launch window: the deployer's buy in the creation tx counts, a transfer is counted once, a flip is a sell", async () => {
+  const { readLaunch } = await import("../src/lib/launch");
+  const { ed25519 } = await import("@noble/curves/ed25519.js");
+  const bs58 = (await import("bs58")).default;
+  let n = 1;
+  const onCurve = () => bs58.encode(ed25519.getPublicKey(Uint8Array.from({ length: 32 }, () => (n = (n * 48271) % 251))));
+  const DEV = onCurve(), A = onCurve(), B = onCurve(), S = onCurve();
+  const CURVE = "11111111111111111111111111111112"; // off-curve stand-in
+  const MINT = "MINTxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+  const SUP = 1_000_000_000_000_000;
+  const tb = (o: string, f: number) => ({ accountIndex: 1, mint: MINT, owner: o, uiTokenAmount: { amount: String(Math.round(f * SUP)), decimals: 6 } });
+  const tx = (slot: number, payer: string, pre: unknown[], post: unknown[], ix: unknown[] = []) => ({
+    slot, blockTime: 1, transaction: { signatures: [`s${slot}${payer.slice(0, 4)}`], message: { accountKeys: [{ pubkey: payer, signer: true }], instructions: ix } },
+    meta: { err: null, fee: 5000, preBalances: [2e9], postBalances: [1e9], preTokenBalances: pre, postTokenBalances: post, innerInstructions: [] },
+  });
+  const r = readLaunch([
+    tx(10, DEV, [], [tb(CURVE, 0.95), tb(DEV, 0.05)], [{ parsed: { type: "initializeMint2", info: { mint: MINT } } }]),
+    tx(10, A, [tb(CURVE, 0.95)], [tb(CURVE, 0.93), tb(A, 0.02)]),
+    tx(11, A, [tb(A, 0.02)], [tb(A, 0.01), tb(B, 0.01)]),
+    tx(11, S, [tb(CURVE, 0.93)], [tb(CURVE, 0.92), tb(S, 0.01)]),
+    tx(12, S, [tb(CURVE, 0.92), tb(S, 0.01)], [tb(CURVE, 0.93), tb(S, 0)]),
+  ] as never, MINT);
+  const got = (w: string) => Number(r.buys.get(w)?.bought || 0n) / SUP;
+  assert.equal(got(DEV), 0.05);
+  assert.equal(r.buys.get(DEV)!.signature, r.createSig);
+  assert.equal(got(A), 0.02);
+  assert.equal(got(B), 0, "a wallet that was passed tokens did not buy them");
+  assert.equal(r.moves.length, 1);
+  assert.equal(Number(r.buys.get(S)!.sold) / SUP, 0.01);
+  const total = [...r.buys.values()].reduce((t, b) => t + Number(b.bought), 0) / SUP;
+  assert.equal(Math.round(total * 1000) / 1000, 0.08);
+});

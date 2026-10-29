@@ -48,6 +48,9 @@ export interface Node {
   first: FirstIn | null;
   prefund?: PreFund | null; // the last SOL in before the first buy
   atLaunch?: boolean; // received the token in the launch window
+  launchRole?: "dev" | "bundle" | "passed"; // deployer buy, launch wallet, or got tokens from a launch wallet
+  launchGot?: number; // % of supply taken in the launch window
+  launchOffset?: number; // slots after creation
   x: number;
   y: number;
   r: number;
@@ -129,14 +132,46 @@ export interface MapResult {
   launch?: Launch | null;
 }
 
+export interface LaunchWallet {
+  id: string;
+  offset: number; // slots after creation of its first buy: 0 is the creation block
+  got: number; // % of supply it took from the curve or pool inside the window
+  received: number; // % passed to it by other launch wallets inside the window
+  sold: number; // % it sold back inside the window
+  sentOut: number; // % it passed to other wallets inside the window
+  holds: number; // % it holds now
+  sol: number; // SOL spent across its window transactions (buys, fees, tips)
+  tip: number; // Jito tip in SOL
+  feePayer: string; // who signed and paid for its first buy
+  signature: string; // its first buy
+  sameTx: boolean; // bought inside the creation transaction itself
+  dev: boolean;
+  rank: number | null; // its place among the mapped holders, if it is one
+}
+
 export interface Launch {
   slot: number; // the creation slot
-  wallets: number; // wallets (not the deployer) that received the token within the launch window
-  pctBought: number; // share of supply they got
-  pctHeld: number; // share of supply those same wallets hold now
-  heldBy: number; // how many of them are still among the top holders
   window: number; // slots after creation that count
-  partial: boolean; // more buys than one page could read
+  createSig: string | null;
+  wallets: number; // wallets other than the deployer that took supply in the window
+  pctBought: number; // % of supply taken in the window by everyone, the deployer included
+  pctBlock0: number; // of that, in the creation block itself
+  dev: { got: number; holds: number; sameTx: boolean } | null; // the deployer's own launch buy
+  pctBundle: number; // % taken by wallets other than the deployer
+  pctSoldInWindow: number; // % sold back inside the window (instant flips)
+  pctHeld: number; // % still held now by the non-deployer launch wallets and the wallets they passed tokens to
+  pctHeldDirect: number; // of pctHeld, in the launch wallets themselves
+  pctHeldPassed: number; // of pctHeld, in wallets that got their tokens from a launch wallet
+  pctHeldAll: number; // pctHeld plus what the deployer holds now
+  passedTo: number; // wallets that got tokens from a launch wallet
+  sol: number; // SOL spent by all launch wallets
+  tipped: number; // launch wallets that paid a Jito tip
+  paidByOther: number; // launch wallets whose first buy was signed and paid by another wallet
+  sharedPayers: number; // distinct outside wallets that paid for 2+ launch buys
+  bySlot: { offset: number; wallets: number; pct: number }[];
+  list: LaunchWallet[]; // biggest first, up to 60
+  heldBy: number; // launch wallets still among the mapped holders
+  partial: boolean; // the window held more transactions than one read covers
 }
 
 export type Stage =

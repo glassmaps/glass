@@ -39,6 +39,8 @@ const EXCH = wallet(); // named exchange hot wallet that sends a withdrawal batc
 const RELOADER = wallet(); // unnamed wallet that reloads aged wallets right before they buy
 const MIDDLE = wallet(); // an outside wallet that funded three holders
 const FEEWALLET = wallet(); // a bot's fee wallet every trader pays
+const SNIPER = wallet(); // bought one slot after launch and dumped inside the window
+const PASSED = wallet(); // got 0.5% from a launch wallet
 const hs: H[] = [];
 hs.push({ owner: CURVE, amt: 0.21, funder: "", fundT: 0, slot: S0, spent: 0 });
 hs.push({ owner: CEX_HOLDER, amt: 0.034, funder: CEX, fundT: T0 - 9e6, named: true, slot: S0 + 9000, spent: 0 });
@@ -105,7 +107,25 @@ function rpc(method: string, params: any) {
     case "getTransactionsForAddress": {
       const [addr] = params;
       if (addr === MINT && params[1]?.filters?.slot) {
-        return { result: { data: hs.filter((h) => h.slot === S0 - 2).map(firstTx), paginationToken: null } };
+        // the launch window: the deployer creates and buys 3%, two wallets buy 2% each in the same block,
+        // one passes 0.5% to a fresh wallet, and a sniper buys 1% one slot later and dumps it inside the window
+        const tb = (o: string, a: number) => ({ accountIndex: 6, mint: MINT, owner: o, uiTokenAmount: { amount: String(Math.round(a * SUPPLY)), decimals: DEC } });
+        const cv = (a: number) => ({ accountIndex: 5, mint: MINT, owner: CURVE, uiTokenAmount: { amount: String(Math.round(a * SUPPLY)), decimals: DEC } });
+        const tx = (slot: number, idx: number, payer: string, pre: unknown[], post: unknown[], ix: unknown[] = [], spent = 0) => ({
+          slot, transactionIndex: idx, blockTime: T0 - 1,
+          transaction: { signatures: [sig()], message: { accountKeys: [{ pubkey: payer, signer: true }], instructions: ix } },
+          meta: { err: null, fee: 5000, preBalances: [5e9], postBalances: [5e9 - spent], innerInstructions: [], preTokenBalances: pre, postTokenBalances: post },
+        });
+        const L = hs.filter((h) => h.slot === S0 - 2);
+        const data = [
+          tx(S0 - 2, 0, DEPLOYER, [], [cv(0.97), tb(DEPLOYER, 0.03)], [{ program: "spl-token", parsed: { type: "initializeMint2", info: { mint: MINT } } }], 1.1e9),
+          tx(S0 - 2, 1, L[0].owner, [cv(0.97)], [cv(0.95), tb(L[0].owner, 0.02)], [], 1.5e9),
+          tx(S0 - 2, 2, L[1].owner, [cv(0.95)], [cv(0.93), tb(L[1].owner, 0.02)], [], 1.5e9),
+          tx(S0 - 1, 0, SNIPER, [cv(0.93)], [cv(0.92), tb(SNIPER, 0.01)], [], 0.7e9),
+          tx(S0 - 1, 1, L[0].owner, [tb(L[0].owner, 0.02)], [tb(L[0].owner, 0.015), { ...tb(PASSED, 0.005), accountIndex: 7 }]),
+          tx(S0, 0, SNIPER, [cv(0.92), tb(SNIPER, 0.01)], [cv(0.93), tb(SNIPER, 0)]),
+        ];
+        return { result: { data, paginationToken: null } };
       }
       if (addr === MINT) {
         return { result: { data: [{ slot: S0 - 2, blockTime: T0 - 1, transaction: { signatures: [sig()], message: { accountKeys: [{ pubkey: DEPLOYER, signer: true }], instructions: [] } }, meta: { err: null, fee: 5000, preBalances: [0], postBalances: [0] } }], paginationToken: null } };

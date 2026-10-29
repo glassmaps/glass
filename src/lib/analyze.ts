@@ -2,6 +2,8 @@ import { limits, METHOD_VERSION, rules, site } from "@/config/site";
 import { BURN } from "@/config/known";
 import * as cache from "./cache";
 import { isAddress, isOnCurve } from "./address";
+import type { LaunchBuy } from "./launch";
+import { buildLaunch } from "./launch-view";
 import { deployerOf, firstIn, fundingOf, getAsset, getHolders, identities, launchBuys, prefundFrom, prefundOf, recentOf, UpstreamError, type Recent, type Xfer } from "./helius";
 import { market } from "./market";
 import { mapLimit } from "./pool";
@@ -95,17 +97,24 @@ export async function analyze(
     };
   });
 
-  // the launch bundle reads the mint's own history: start it now, it runs beside everything else
-  type LB = [string, { slot: number; raw: string; signature: string; feePayer: string }][];
-  const launchP = (async () => {
+  // the launch window reads the mint's own history: start it now, it runs beside everything else
+  type LBW = Omit<LaunchBuy, "bought" | "sold" | "sentOut" | "received"> & { bought: string; sold: string; sentOut: string; received: string };
+  type LB = { b: LBW[]; moves: { from: string; to: string; raw: string; signature: string; slot: number }[]; createSig: string | null; full: boolean };
+  const launchP = (async (): Promise<LB | null> => {
     if (!birth?.slot) return null;
     try {
-      const k = `lb:${mint}`;
-      const hit = await cache.get<{ b: LB; full: boolean }>(k);
+      const key = `lb3:${mint}`;
+      const hit = await cache.get<LB>(key);
       if (hit) return hit;
       const r = await launchBuys(mint, birth.slot, rules.launchWindowSlots);
-      const v = { b: [...r.buys.entries()].map(([o, x]) => [o, { ...x, raw: x.raw.toString() }]) as LB, full: r.full };
-      await cache.set(k, v);
+      const v: LB = {
+        b: [...r.buys.values()].map((x) => ({ ...x, bought: x.bought.toString(), sold: x.sold.toString(), sentOut: x.sentOut.toString(), received: x.received.toString() })),
+        moves: r.moves.map((m) => ({ ...m, raw: m.raw.toString() })),
+        createSig: r.createSig, full: r.full,
+      };
+      // a token minutes old may not be fully indexed yet: only remember the window once it is settled
+      const settled = birth.time > 0 && Date.now() / 1000 - birth.time > 180;
+      if (settled && !r.full) await cache.set(key, v);
       return v;
     } catch {
       return null;
@@ -294,22 +303,9 @@ export async function analyze(
   // ---------------------------------------------------------------- names for everyone outside the holder list
   while ([...outsideNow()].some((a) => !checked.has(a))) await lookup();
 
-  // ---------------------------------------------------------------- launch bundle
+  // ---------------------------------------------------------------- launch window
   const lb = await launchP;
-  if (lb?.b.length) {
-    const bundle = lb.b.filter(([o]) => o !== deployer);
-    if (bundle.length) {
-      const bought = bundle.reduce((t, [, v]) => t + Number(v.raw), 0) / scale;
-      const held = bundle.reduce((t, [o]) => t + (byOwner.get(o) || 0), 0) / scale;
-      const inTop = new Set(nodes.map((n) => n.id));
-      for (const [o] of bundle) { const n = nodes.find((x) => x.id === o); if (n) n.atLaunch = true; }
-      launch = {
-        slot: birth!.slot, wallets: bundle.length, window: rules.launchWindowSlots, partial: lb.full,
-        pctBought: supply ? (bought / supply) * 100 : 0, pctHeld: supply ? (held / supply) * 100 : 0,
-        heldBy: bundle.filter(([o]) => inTop.has(o)).length,
-      };
-    }
-  }
+  if (lb?.b.length) launch = buildLaunch(lb, { birthSlot: birth!.slot, deployer, scale, supply, byOwner, nodes, people, recent, mint });
 
   if (firstMissing) {
     console.error("first-buy reads failed", mint, firstMissing, firstErr);

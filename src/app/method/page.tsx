@@ -166,11 +166,21 @@ export default function Method() {
                 <div><span className="conf conf-medium">medium</span><p>One signal.</p></div>
                 <div><span className="conf conf-low">low</span><p>Timing alone. Shown on the map, never scored.</p></div>
               </div>
-              <h3 className="m-h3">Launch bundle</h3>
+              <h3 className="m-h3">Launch window</h3>
               <p>
-                Separately, the token&apos;s own history is read from its creation slot: every wallet that received it in that block or the{" "}
-                {rules.launchWindowSlots} after it, except the deployer. Those buys were placed with the launch. The panel shows how much of the supply they got and
-                how much they still hold, and what they still hold is scored. A bundle that sold or moved its tokens still shows as bought.
+                Separately, every transaction of the token from its creation slot through the {rules.launchWindowSlots} slots after it is read, all pages.
+                Each balance change is sorted into one of three kinds, so no token is counted twice:
+              </p>
+              <ul className="m-list">
+                <li><b>Taken</b>: a wallet gained what the curve, a pool or the mint gave out. The deployer&apos;s buy inside the creation transaction counts, shown on its own line.</li>
+                <li><b>Passed</b>: one wallet lost what another gained. The receiver did not buy; it is tracked as a wallet the launch passed tokens to.</li>
+                <li><b>Sold back</b>: a wallet lost what the curve or pool gained, inside the window. Instant flips show up here.</li>
+              </ul>
+              <p>
+                The panel shows supply taken per slot (block 0 first), SOL spent, Jito tips and buys signed by another wallet, then what is still held now: by the
+                launch wallets, by the deployer, and by wallets they passed tokens to, inside the window, by a mapped holder&apos;s first receipt or by a transfer
+                in its recent history. What the launch wallets and their receivers still hold is scored; the deployer is scored on its own line. A window read
+                minutes after launch is not cached, so a rescan picks up slots the index had not finished.
               </p>
             </section>
 

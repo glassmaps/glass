@@ -21,7 +21,8 @@ Glass shows data, never verdicts. It does not investigate people, it does not ta
    - **moved**: any transfer between two top holders, of any token or SOL; and middlemen, unnamed wallets that sent to or collected from 2+ holders
    - one transaction draws one line: when it fits several rules, the strongest one shows
 7. **Cohorts.** 3+ first buys within 2 slots, or 2+ in the token's creation block, rated by shared fee payer, same size (within 12%), same Jito tip, fresh wallets and reloads under 6h before buying. This catches bundles that never transfer between their wallets.
-8. **Score.** 100 minus capped penalties for top-10 share, linked share, cohort share, deployer share and fresh wallets.
+8. **Launch window.** Every transaction of the mint from its creation slot through the next 2 slots, all pages. Each balance change is a take (from curve, pool or mint), a pass (wallet to wallet) or a sell back, so nothing is counted twice. Reports supply taken per slot, the deployer's own buy, SOL spent, Jito tips, buys paid by another wallet, and what the launch wallets and the wallets they passed tokens to still hold.
+9. **Score.** 100 minus capped penalties for top-10 share, linked share, cohort share, deployer share and fresh wallets.
 
 All thresholds live in [`src/config/site.ts`](src/config/site.ts). All rules live in [`src/lib/graph.ts`](src/lib/graph.ts) and are pinned by [`test/graph.test.ts`](test/graph.test.ts). The live site renders its [method page](src/app/method/page.tsx) from the same constants.
 

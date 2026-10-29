@@ -10,6 +10,7 @@ import { clusterColor, MapCanvas, type Layers, type Pick } from "./map-canvas";
 import { CopyButton } from "./copy";
 import { TokenImg } from "./token-img";
 import { VenueLinks } from "./venues";
+import { LaunchPanel } from "./launch-panel";
 import { Close, Fit, Minus, Out, Plus, Redo, Share } from "./icons";
 
 type Err = { code: string; message: string };
@@ -171,7 +172,7 @@ function Failed({ err, retry }: { err: Err; retry: () => void }) {
 
 // ------------------------------------------------------------------ panel parts
 
-function ScoreTab({ d, live = false }: { d: MapResult; live?: boolean }) {
+function ScoreTab({ d, live = false, setPick }: { d: MapResult; live?: boolean; setPick: (p: Pick) => void }) {
   return (
     <>
       <div className="score-head">
@@ -191,16 +192,7 @@ function ScoreTab({ d, live = false }: { d: MapResult; live?: boolean }) {
             : "A number, not a verdict. Every point comes from a line below."}
         </p>
       </div>
-      {d.launch && (
-        <div className="launch">
-          <span className="micro">Launch bundle</span>
-          <p>
-            <b className="num">{d.launch.wallets}{d.launch.partial ? "+" : ""}</b> wallet{d.launch.wallets === 1 ? "" : "s"} got{" "}
-            <b className="num">{fmtPct(d.launch.pctBought)}</b> of supply in the creation block or the {d.launch.window} after it.
-            They still hold <b className="num">{fmtPct(d.launch.pctHeld)}</b>{d.launch.heldBy ? <>, {d.launch.heldBy} of them in the top {d.nodes.filter((n) => n.rank).length}</> : null}.
-          </p>
-        </div>
-      )}
+      <LaunchPanel d={d} setPick={setPick} />
       <ul className="items">
         {d.score.items.map((i) => (
           <li key={i.key}>
@@ -378,7 +370,9 @@ function Inspector({ d, pick, onClose }: { d: MapResult; pick: Pick; onClose: ()
                   </dd>
                 </>
               )}
-              {node.atLaunch && <><dt>Launch</dt><dd className="flag">got the token in the launch block</dd></>}
+              {node.launchRole === "dev" && <><dt>Launch</dt><dd className="flag num">deployer, took {fmtPct(node.launchGot || 0)} {node.launchOffset ? `${node.launchOffset} slot${node.launchOffset === 1 ? "" : "s"} after creation` : "in the creation block"}</dd></>}
+              {node.launchRole === "bundle" && <><dt>Launch</dt><dd className="flag num">took {fmtPct(node.launchGot || 0)} {node.launchOffset ? `${node.launchOffset} slot${node.launchOffset === 1 ? "" : "s"} after creation` : "in the creation block"}</dd></>}
+              {node.launchRole === "passed" && <><dt>Launch</dt><dd className="flag">got its tokens from a launch wallet</dd></>}
               {node.fresh && <><dt>Fresh</dt><dd className="flag">funded under 6h before buying</dd></>}
             </dl>
             <h3 className="micro">{links.length ? `Receipts · ${links.length}` : "Receipts"}</h3>
@@ -513,7 +507,7 @@ export function MapScreen({ mint, initial }: { mint: string; initial: MapResult 
               </div>
               {data.notes.length > 0 && <ul className="notes">{data.notes.map((n) => <li key={n}>{n}</li>)}</ul>}
               <div className="pane" role="tabpanel">
-                {tab === "score" && <ScoreTab d={data} live={scanning} />}
+                {tab === "score" && <ScoreTab d={data} live={scanning} setPick={setPick} />}
                 {tab === "clusters" && <ClustersTab d={data} pick={pick} setPick={setPick} />}
                 {tab === "holders" && <HoldersTab d={data} pick={pick} setPick={setPick} />}
               </div>

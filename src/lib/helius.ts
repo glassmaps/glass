@@ -4,6 +4,7 @@ import { isOnCurve } from "./address";
 import { JITO_TIP, PROGRAMS } from "@/config/known";
 import type { FirstIn, Funding, PreFund } from "./types";
 import * as cache from "./cache";
+import { readLaunch, type LTx } from "./launch";
 
 const KEY = process.env.HELIUS_API_KEY || "";
 const RPC = process.env.HELIUS_RPC_URL || `https://mainnet.helius-rpc.com/?api-key=${KEY}`;
@@ -222,7 +223,7 @@ interface GtfaPage {
   paginationToken: string | null;
 }
 
-const gtfa = (address: string, filters: Record<string, unknown>, limit = 1, tries = 4, sortOrder: "asc" | "desc" = "asc") =>
+const gtfa = (address: string, filters: Record<string, unknown>, limit = 1, tries = 4, sortOrder: "asc" | "desc" = "asc", paginationToken?: string) =>
   rpc<GtfaPage>("getTransactionsForAddress", [
     address,
     {
@@ -231,6 +232,7 @@ const gtfa = (address: string, filters: Record<string, unknown>, limit = 1, trie
       maxSupportedTransactionVersion: 1,
       sortOrder,
       limit,
+      ...(paginationToken ? { paginationToken } : {}),
       filters: { status: "succeeded", ...filters },
     },
   ], tries);
@@ -263,22 +265,22 @@ export async function transfersOf(address: string): Promise<Xfer[]> {
  * Everyone who received the token in its first slots, straight from the mint's own history.
  * This is how launch bundles are measured: buys that landed with the creation, whether or not those wallets still hold.
  */
+/**
+ * Every transaction of the mint inside the launch window, all pages (up to 1,000), read by src/lib/launch.ts.
+ * `full` is true when the window held more than that and the read stopped early.
+ */
 export async function launchBuys(mint: string, createdSlot: number, slots: number) {
-  const r = await gtfa(mint, { slot: { gte: createdSlot, lte: createdSlot + slots } }, 100, 3);
-  const out = new Map<string, { slot: number; raw: bigint; signature: string; feePayer: string }>();
-  for (const tx of r.data || []) {
-    if (!tx.meta || tx.meta.err) continue;
-    const pre = new Map<string, bigint>(), post = new Map<string, bigint>();
-    for (const b of tx.meta.preTokenBalances || []) if (b.mint === mint && b.owner) pre.set(b.owner, (pre.get(b.owner) || 0n) + BigInt(b.uiTokenAmount.amount));
-    for (const b of tx.meta.postTokenBalances || []) if (b.mint === mint && b.owner) post.set(b.owner, (post.get(b.owner) || 0n) + BigInt(b.uiTokenAmount.amount));
-    for (const [o, v] of post) {
-      const d = v - (pre.get(o) || 0n);
-      if (d <= 0n || !isOnCurve(o)) continue;
-      const cur = out.get(o);
-      out.set(o, { slot: cur?.slot ?? tx.slot, raw: (cur?.raw || 0n) + d, signature: cur?.signature ?? tx.transaction.signatures[0], feePayer: cur?.feePayer ?? tx.transaction.message.accountKeys[0]?.pubkey });
-    }
+  const txs: FullTx[] = [];
+  let token: string | undefined;
+  let full = false;
+  for (let page = 0; page < 10; page++) {
+    const r = await gtfa(mint, { slot: { gte: createdSlot, lte: createdSlot + slots } }, 100, 3, "asc", token);
+    txs.push(...(r.data || []));
+    token = r.paginationToken || undefined;
+    if (!token || (r.data || []).length < 100) break;
+    if (page === 9) full = true;
   }
-  return { buys: out, full: (r.data || []).length >= 100 };
+  return { ...readLaunch(txs as LTx[], mint), full };
 }
 
 const SOLM = "So11111111111111111111111111111111111111112";
