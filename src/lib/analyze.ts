@@ -23,6 +23,10 @@ const selfLabels = (): Record<string, string> => {
   }
 };
 
+/** Our own token, by mint once it is live, by ticker before that. Kept out of public lists. */
+export const isOwn = (mint: string, symbol?: string | null) =>
+  (Boolean(site.tokenMint) && mint === site.tokenMint) || (symbol || "").replace(/^\$/, "").toUpperCase() === site.ticker;
+
 export const mapKey = (mint: string) => `map:${METHOD_VERSION}:${mint}`;
 
 export async function cachedMap(mint: string) {
@@ -172,8 +176,10 @@ export async function analyze(mint: string, onStage: (s: Stage) => void = () => 
     holdersTotal: byOwner.size, partial,
     nodes: all, edges, clusters, cohorts, score: sc,
     scannedAt: Date.now(), ms: Date.now() - t0, self, notes,
+    complete: !fundingBlocked && firstMissing <= people.length * 0.2,
   };
   await cache.set(mapKey(mint), result, limits.scanTtl);
-  await cache.pushRecent({ mint, name: asset.name, symbol: asset.symbol, image: asset.image, score: sc.total, band: sc.band, at: result.scannedAt });
+  // our own token never appears in the public "mapped recently" list
+  if (!isOwn(mint, asset.symbol)) await cache.pushRecent({ mint, name: asset.name, symbol: asset.symbol, image: asset.image, score: sc.total, band: sc.band, at: result.scannedAt });
   return result;
 }

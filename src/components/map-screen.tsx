@@ -151,8 +151,16 @@ function ScoreTab({ d }: { d: MapResult }) {
     <>
       <div className="score-head">
         <div className="score-big num">{d.score.total}<small>/100</small></div>
-        <span className={`band band-${d.score.band}`}>{BAND_LABEL[d.score.band]}</span>
-        <p className="score-note">A number, not a verdict. Every point comes from a line below.</p>
+        {d.complete === false ? (
+          <span className="band band-concentrated">Incomplete</span>
+        ) : (
+          <span className={`band band-${d.score.band}`}>{BAND_LABEL[d.score.band]}</span>
+        )}
+        <p className="score-note">
+          {d.complete === false
+            ? "Not enough of the chain was read to draw links, so this score only counts what was read. See the note above."
+            : "A number, not a verdict. Every point comes from a line below."}
+        </p>
       </div>
       <ul className="items">
         {d.score.items.map((i) => (

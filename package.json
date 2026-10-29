@@ -1,6 +1,6 @@
 {
   "name": "glass",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "The bubble map with receipts. Every link between two wallets is backed by the transaction that proves it.",
   "license": "MIT",

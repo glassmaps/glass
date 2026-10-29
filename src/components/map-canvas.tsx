@@ -251,7 +251,7 @@ export function MapCanvas({
                     {n.rank}
                   </text>
                 )}
-                {layers.labels && n.label && n.r * view.k >= 7 && (
+                {layers.labels && n.label && n.r * view.k >= 7 && !(n.labelSource === "rule" && n.kind !== "holder" && n.r * view.k <= 44) && (
                   <text
                     x={n.x}
                     // big bubbles carry their label inside, under the rank; small ones underneath

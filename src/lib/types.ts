@@ -110,6 +110,7 @@ export interface MapResult {
   ms: number;
   self: boolean; // the token is ours and its wallets carry our own labels
   notes: string[]; // anything the reader should know about how complete this read is
+  complete?: boolean; // false when funding or most first buys were missing: links could not be drawn
 }
 
 export type Stage =
