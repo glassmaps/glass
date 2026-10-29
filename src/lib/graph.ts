@@ -1,6 +1,8 @@
 // Pure functions: holders in, edges / clusters / cohorts / score out. No I/O, so every rule is unit-tested.
 import { BANDS, rules, SCORE_RULES } from "@/config/site";
 import type { Cluster, Cohort, Edge, Node, Receipt, ScoreItem } from "./types";
+import type { Xfer } from "./helius";
+import { isOnCurve } from "./address";
 
 const sol = (n: number) => `${n < 0.01 ? n.toFixed(4) : n < 10 ? n.toFixed(3) : n.toFixed(1)} SOL`;
 const short = (a: string) => `${a.slice(0, 4)}…${a.slice(-4)}`;
@@ -12,7 +14,13 @@ const anonymousFunder = (n: Node) => n.funding && !n.funding.funderName && !n.fu
 
 const mins = (sec: number) => (sec < 3600 ? `${Math.max(1, Math.round(sec / 60))} min` : `${(sec / 3600).toFixed(1)}h`);
 
-export function buildEdges(holders: Node[], deployer: string | null, symbol = "", known: Set<string> = new Set()) {
+const SOL = "So11111111111111111111111111111111111111112";
+const day = (t: number) => new Date(t * 1000).toISOString().slice(0, 10);
+
+export function buildEdges(
+  holders: Node[], deployer: string | null, symbol = "", known: Set<string> = new Set(),
+  xfers: Map<string, Xfer[]> = new Map(), mint = "",
+) {
   const byId = new Map(holders.map((h) => [h.id, h]));
   const edges: Edge[] = [];
   const virtual = new Map<string, Node>();
@@ -137,6 +145,49 @@ export function buildEdges(holders: Node[], deployer: string | null, symbol = ""
         const pf = h.prefund!;
         add(v.id, h.id, "batch", [{ signature: pf.signature, what: `${name} sent ${sol(pf.lamports / 1e9)} to ${short(h.id)}, one of ${same.length} near-equal withdrawals within ${mins(Math.max(60, t1 - t0))}, ${mins(h.first!.blockTime - pf.blockTime)} before its first buy`, time: pf.blockTime }]);
       }
+    }
+  }
+  // 7. any transfer between two top holders, of any token, at any time: the link every bubble map is built on
+  const pairs = new Map<string, { a: string; b: string; receipts: Receipt[] }>();
+  const middle = new Map<string, Map<string, Xfer>>(); // outside wallet -> holder -> one receipt
+  const linkableIds = new Set(holders.filter(linkable).map((h) => h.id));
+  for (const [hid, list] of xfers) {
+    if (!linkableIds.has(hid)) continue;
+    for (const t of list) {
+      const cp = t.counterparty;
+      if (cp === hid) continue;
+      const tok = t.mint === SOL ? "SOL" : t.mint === mint ? (symbol ? "$" + symbol : "the token") : t.symbol || "tokens";
+      if (linkableIds.has(cp)) {
+        const [a, b] = t.direction === "out" ? [hid, cp] : [cp, hid];
+        const key = [a, b].sort().join(":");
+        const p = pairs.get(key) || { a, b, receipts: [] };
+        if (p.receipts.length < 3 && !p.receipts.some((r) => r.signature === t.signature)) {
+          p.receipts.push({ signature: t.signature, what: `${short(a)} sent ${t.amount.toLocaleString("en-US", { maximumFractionDigits: 4 })} ${tok} to ${short(b)} on ${day(t.timestamp)}`, time: t.timestamp });
+        }
+        pairs.set(key, p);
+        continue;
+      }
+      // an outside wallet counts as a middleman only for money moving the way a bundle moves it:
+      // SOL or this token sent to the holder, or this token gathered from it. Fees and swaps never qualify.
+      const funding = t.direction === "in" && ((t.mint === SOL && t.amount >= 0.05) || t.mint === mint);
+      const gather = t.direction === "out" && t.mint === mint;
+      if (!(funding || gather) || known.has(cp) || cp === deployer || !isOnCurve(cp)) continue;
+      const m = middle.get(cp) || new Map<string, Xfer>();
+      if (!m.has(hid)) m.set(hid, t);
+      middle.set(cp, m);
+    }
+  }
+  for (const p of pairs.values()) add(p.a, p.b, "moved", p.receipts);
+  const cap = Math.max(3, Math.floor(linkableIds.size * 0.4)); // a wallet touching most holders is a service, not a person
+  for (const [cp, m] of middle) {
+    if (m.size < 2 || m.size > cap) continue;
+    const v = funderNode(cp, "Middleman");
+    for (const [hid, t] of m) {
+      const tok = t.mint === SOL ? "SOL" : symbol ? "$" + symbol : "tokens";
+      const what = t.direction === "in"
+        ? `${short(cp)} sent ${t.amount.toLocaleString("en-US", { maximumFractionDigits: 4 })} ${tok} to ${short(hid)} on ${day(t.timestamp)}, and moved money with ${m.size - 1} other holder${m.size > 2 ? "s" : ""}`
+        : `${short(hid)} sent ${t.amount.toLocaleString("en-US", { maximumFractionDigits: 4 })} ${tok} to ${short(cp)} on ${day(t.timestamp)}, which also collects from ${m.size - 1} other holder${m.size > 2 ? "s" : ""}`;
+      add(v.id, hid, "moved", [{ signature: t.signature, what, time: t.timestamp }]);
     }
   }
   return { edges, virtual: [...virtual.values()] };
@@ -273,7 +324,7 @@ export function buildCohorts(holders: Node[], createdSlot: number | null = null)
 
 const round1 = (v: number) => Math.round(v * 10) / 10;
 
-export function score(holders: Node[], clusters: Cluster[], cohorts: Cohort[]) {
+export function score(holders: Node[], clusters: Cluster[], cohorts: Cohort[], launchHeld = 0) {
   const ranked = holders.filter((h) => h.kind === "holder" || h.kind === "exchange").sort((a, b) => b.pct - a.pct);
   const top10 = ranked.slice(0, 10).reduce((s, h) => s + h.pct, 0);
   const clustered = clusters.reduce((s, c) => s + c.pct, 0);
@@ -283,7 +334,7 @@ export function score(holders: Node[], clusters: Cluster[], cohorts: Cohort[]) {
   const dev = (devCluster?.pct || 0) + (devSelf?.pct || 0);
   const fresh = holders.filter((h) => h.fresh).reduce((s, h) => s + h.pct, 0);
 
-  const values: Record<string, number> = { top10, clusters: clustered, cohorts: cohort, dev, fresh };
+  const values: Record<string, number> = { top10, clusters: clustered, cohorts: cohort, dev, fresh, launch: launchHeld };
   const items: ScoreItem[] = SCORE_RULES.map((r) => {
     const value = round1(values[r.key]);
     return { key: r.key, label: r.label, value, max: r.max, penalty: round1(Math.min(r.max, Math.max(0, value - r.free) * r.weight)) };

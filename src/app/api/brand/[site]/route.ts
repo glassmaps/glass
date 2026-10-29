@@ -4,7 +4,7 @@
 export const runtime = "nodejs";
 
 const SOURCES: Record<string, string[]> = {
-  pump: ["https://pump.fun/icon.png", "https://pump.fun/favicon.ico"],
+  pump: ["https://dd.dexscreener.com/ds-data/tokens/solana/pumpCmXqMfrsAkQ5r49WcJnRayYRqmXz6ae8H7H9Dfn.png?size=lg", "https://pump.fun/icon.png", "https://pump.fun/favicon.ico"],
   gmgn: ["https://gmgn.ai/static/apple-touch-icon.png", "https://gmgn.ai/favicon.ico"],
   axiom: ["https://axiom.trade/apple-touch-icon.png", "https://axiom.trade/favicon.ico", "https://axiom.trade/favicon.png"],
   dex: ["https://dexscreener.com/favicon.png", "https://dexscreener.com/favicon.ico"],
@@ -16,7 +16,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ site: s
   if (!list) return new Response("unknown", { status: 404 });
   for (const url of list) {
     try {
-      const r = await fetch(url, { signal: AbortSignal.timeout(4000), headers: { "user-agent": "Mozilla/5.0 (compatible; glass-icons)", accept: "image/*" }, cache: "no-store" });
+      const r = await fetch(url, { signal: AbortSignal.timeout(4000), headers: { "user-agent": "Mozilla/5.0 (compatible; glass-icons)", accept: "image/*" }, cache: "no-store", redirect: "follow" });
       const type = (r.headers.get("content-type") || "").split(";")[0];
       if (!r.ok || !(type.startsWith("image/") || url.endsWith(".ico"))) continue;
       const body = await r.arrayBuffer();

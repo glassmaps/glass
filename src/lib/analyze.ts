@@ -1,8 +1,8 @@
-import { limits, METHOD_VERSION, site } from "@/config/site";
+import { limits, METHOD_VERSION, rules, site } from "@/config/site";
 import { BURN } from "@/config/known";
 import * as cache from "./cache";
 import { isAddress, isOnCurve } from "./address";
-import { deployerOf, firstIn, fundedBy, getAsset, getHolders, identities, prefundOf, UpstreamError } from "./helius";
+import { deployerOf, firstIn, fundedBy, getAsset, getHolders, identities, launchBuys, prefundOf, transfersOf, UpstreamError, type Xfer } from "./helius";
 import { market } from "./market";
 import { mapLimit } from "./pool";
 import { buildClusters, buildCohorts, buildEdges, markFresh, score } from "./graph";
@@ -194,12 +194,71 @@ export async function analyze(mint: string, onStage: (s: Stage) => void = () => 
   }
   const knownPayers = new Set([...named.keys()]);
 
+  // every holder's recent transfers: direct links between holders, and the middlemen between them
+  const xfers = new Map<string, Xfer[]>();
+  done = 0;
+  let xferBlocked = false;
+  const txKeys = people.map((n) => `tx:${n.id}`);
+  const txHits = await cache.getMany<{ x: Xfer[] }>(txKeys);
+  await mapLimit(people, limits.concurrency, async (n, i) => {
+    if (txHits[i]) xfers.set(n.id, txHits[i]!.x);
+    else if (!xferBlocked && Date.now() - t0 < 46_000) {
+      try {
+        // keep only what the rules can use, so the cache stays small
+        const list = (await transfersOf(n.id)).map(({ signature, timestamp, direction, counterparty, mint: m, symbol, amount }) => ({ signature, timestamp, direction, counterparty, mint: m, symbol, amount }));
+        xfers.set(n.id, list);
+        await cache.set(txKeys[i], { x: list }, 6 * 3600);
+      } catch (e) {
+        if (e instanceof UpstreamError && (e.status === 403 || e.status === 401)) xferBlocked = true;
+      }
+    }
+    onStage({ stage: "links", done: ++done, total: people.length });
+  });
+  if (xferBlocked) notes.push("Transfers between holders were not read: the data key's plan does not include the Wallet API.");
+  // outside wallets that touched 2+ holders: ask who they are, so exchanges and services never become middlemen
+  const touch = new Map<string, number>();
+  for (const list of xfers.values()) for (const cp of new Set(list.map((t) => t.counterparty))) if (!byOwner.has(cp)) touch.set(cp, (touch.get(cp) || 0) + 1);
+  const shared = [...touch.entries()].filter(([, c]) => c >= 2).sort((a, b) => b[1] - a[1]).slice(0, 300).map(([a]) => a);
+  const sharedNames = shared.length ? await identities(shared) : new Map();
+  for (const a of sharedNames.keys()) knownPayers.add(a);
+
+  // the launch bundle: who received the token in its first slots, and how much of it they still hold
+  let launch: MapResult["launch"] = null;
+  if (birth?.slot) {
+    try {
+      const k = `lb:${mint}`;
+      const hit = await cache.get<{ b: [string, { slot: number; raw: string; signature: string; feePayer: string }][]; full: boolean }>(k);
+      let entries = hit?.b;
+      let full = hit?.full ?? false;
+      if (!entries) {
+        const r = await launchBuys(mint, birth.slot, rules.launchWindowSlots);
+        entries = [...r.buys.entries()].map(([o, v]) => [o, { ...v, raw: v.raw.toString() }]);
+        full = r.full;
+        await cache.set(k, { b: entries, full });
+      }
+      const bundle = entries.filter(([o]) => o !== deployer);
+      if (bundle.length) {
+        const bought = bundle.reduce((t, [, v]) => t + Number(v.raw), 0) / scale;
+        const held = bundle.reduce((t, [o]) => t + (byOwner.get(o) || 0), 0) / scale;
+        const inTop = new Set(nodes.map((n) => n.id));
+        for (const [o] of bundle) { const n = nodes.find((x) => x.id === o); if (n) n.atLaunch = true; }
+        launch = {
+          slot: birth.slot, wallets: bundle.length, window: rules.launchWindowSlots, partial: full,
+          pctBought: supply ? (bought / supply) * 100 : 0, pctHeld: supply ? (held / supply) * 100 : 0,
+          heldBy: bundle.filter(([o]) => inTop.has(o)).length,
+        };
+      }
+    } catch {
+      /* the map stands without it */
+    }
+  }
+
   onStage({ stage: "layout" });
   markFresh(nodes);
-  const { edges, virtual } = buildEdges(nodes, deployer, asset.symbol, knownPayers);
+  const { edges, virtual } = buildEdges(nodes, deployer, asset.symbol, knownPayers, xfers, mint);
   const clusters = buildClusters(nodes, virtual, edges);
   const cohorts = buildCohorts(nodes, birth?.slot ?? null);
-  const sc = score(nodes, clusters, cohorts);
+  const sc = score(nodes, clusters, cohorts, launch?.pctHeld ?? 0);
   const all = [...nodes, ...virtual];
   layout(all, edges);
 
@@ -214,6 +273,7 @@ export async function analyze(mint: string, onStage: (s: Stage) => void = () => 
     nodes: all, edges, clusters, cohorts, score: sc,
     scannedAt: Date.now(), ms: Date.now() - t0, self, notes,
     complete: !fundingBlocked && firstMissing <= people.length * 0.2,
+    launch,
   };
   await cache.set(mapKey(mint), result, limits.scanTtl);
   // our own token never appears in the public "mapped recently" list

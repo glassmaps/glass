@@ -47,12 +47,13 @@ export interface Node {
   funding: Funding | null;
   first: FirstIn | null;
   prefund?: PreFund | null; // the last SOL in before the first buy
+  atLaunch?: boolean; // received the token in the launch window
   x: number;
   y: number;
   r: number;
 }
 
-export type EdgeType = "funded" | "shared-funder" | "transfer" | "paid" | "prefunded" | "batch";
+export type EdgeType = "funded" | "shared-funder" | "transfer" | "paid" | "prefunded" | "batch" | "moved";
 
 export interface Receipt {
   signature: string;
@@ -125,6 +126,17 @@ export interface MapResult {
   self: boolean; // the token is ours and its wallets carry our own labels
   notes: string[]; // anything the reader should know about how complete this read is
   complete?: boolean; // false when funding or most first buys were missing: links could not be drawn
+  launch?: Launch | null;
+}
+
+export interface Launch {
+  slot: number; // the creation slot
+  wallets: number; // wallets (not the deployer) that received the token within the launch window
+  pctBought: number; // share of supply they got
+  pctHeld: number; // share of supply those same wallets hold now
+  heldBy: number; // how many of them are still among the top holders
+  window: number; // slots after creation that count
+  partial: boolean; // more buys than one page could read
 }
 
 export type Stage =
@@ -132,4 +144,5 @@ export type Stage =
   | { stage: "holders"; count?: number }
   | { stage: "funding"; done: number; total: number }
   | { stage: "first"; done: number; total: number }
+  | { stage: "links"; done: number; total: number }
   | { stage: "layout" };

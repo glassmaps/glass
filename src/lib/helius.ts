@@ -214,7 +214,7 @@ const gtfa = (address: string, filters: Record<string, unknown>, limit = 1, trie
     {
       transactionDetails: "full",
       encoding: "jsonParsed",
-      maxSupportedTransactionVersion: 0,
+      maxSupportedTransactionVersion: 1,
       sortOrder,
       limit,
       filters: { status: "succeeded", ...filters },
@@ -229,6 +229,44 @@ export async function deployerOf(mint: string): Promise<{ deployer: string | nul
   return { deployer: tx.transaction.message.accountKeys[0]?.pubkey ?? null, slot: tx.slot, time: tx.blockTime || 0 };
 }
 
+export interface Xfer {
+  signature: string;
+  timestamp: number;
+  direction: "in" | "out";
+  counterparty: string;
+  mint: string;
+  symbol: string | null;
+  amount: number;
+}
+
+/** A wallet's most recent token and SOL transfers (Wallet API, newest first, one page of 100). */
+export async function transfersOf(address: string): Promise<Xfer[]> {
+  const r = await wallet<{ data?: Xfer[] }>(`/v1/wallet/${address}/transfers?limit=100`);
+  return (r?.data || []).filter((t) => t && t.counterparty && t.signature);
+}
+
+/**
+ * Everyone who received the token in its first slots, straight from the mint's own history.
+ * This is how launch bundles are measured: buys that landed with the creation, whether or not those wallets still hold.
+ */
+export async function launchBuys(mint: string, createdSlot: number, slots: number) {
+  const r = await gtfa(mint, { slot: { gte: createdSlot, lte: createdSlot + slots } }, 100, 3);
+  const out = new Map<string, { slot: number; raw: bigint; signature: string; feePayer: string }>();
+  for (const tx of r.data || []) {
+    if (!tx.meta || tx.meta.err) continue;
+    const pre = new Map<string, bigint>(), post = new Map<string, bigint>();
+    for (const b of tx.meta.preTokenBalances || []) if (b.mint === mint && b.owner) pre.set(b.owner, (pre.get(b.owner) || 0n) + BigInt(b.uiTokenAmount.amount));
+    for (const b of tx.meta.postTokenBalances || []) if (b.mint === mint && b.owner) post.set(b.owner, (post.get(b.owner) || 0n) + BigInt(b.uiTokenAmount.amount));
+    for (const [o, v] of post) {
+      const d = v - (pre.get(o) || 0n);
+      if (d <= 0n || !isOnCurve(o)) continue;
+      const cur = out.get(o);
+      out.set(o, { slot: cur?.slot ?? tx.slot, raw: (cur?.raw || 0n) + d, signature: cur?.signature ?? tx.transaction.signatures[0], feePayer: cur?.feePayer ?? tx.transaction.message.accountKeys[0]?.pubkey });
+    }
+  }
+  return { buys: out, full: (r.data || []).length >= 100 };
+}
+
 /** Did `owner`'s balance of `mint` go up in this transaction? */
 function received(tx: FullTx, owner: string, mint: string) {
   const sum = (list?: TokBal[]) => (list || []).filter((b) => b.mint === mint && b.owner === owner).reduce((t, b) => t + BigInt(b.uiTokenAmount.amount), 0n);
@@ -236,7 +274,7 @@ function received(tx: FullTx, owner: string, mint: string) {
 }
 
 async function getTx(signature: string): Promise<FullTx | null> {
-  const t = await rpc<FullTx | null>("getTransaction", [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0, commitment: "confirmed" }], 4);
+  const t = await rpc<FullTx | null>("getTransaction", [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 1, commitment: "confirmed" }], 4);
   return t;
 }
 

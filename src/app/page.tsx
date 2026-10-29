@@ -5,7 +5,7 @@ import { Search } from "@/components/search";
 import { CopyButton } from "@/components/copy";
 import { Reveal } from "@/components/reveal";
 import { CohortReplay } from "@/components/cohort-replay";
-import { Funded, PaidBy, Reload, SameFunder, Together, Transfer } from "@/components/diagrams";
+import { Funded, LaunchBlock, PaidBy, Reload, SameFunder, Together } from "@/components/diagrams";
 import { Check, Close, Out } from "@/components/icons";
 import { limits, METHOD_VERSION, rules, site } from "@/config/site";
 
@@ -21,12 +21,12 @@ const VS: { row: string; them: string; us: string }[] = [
 ];
 
 const RULES = [
-  { n: "01", name: "Funded", art: <Funded />, text: "One top holder sent another its very first SOL. Same when the deployer did it.", rcpt: "the funding transfer" },
+  { n: "01", name: "Moved between holders", art: <Funded label="2.5 SOL · Oct 12" />, text: "Any transfer between two top holders, of any token, at any time. And the middlemen: an unnamed wallet that funds, or collects from, 2+ holders.", rcpt: "every transfer" },
   { n: "02", name: "Same funder", art: <SameFunder />, text: `${rules.sharedFunderMin}+ holders got their first SOL from one wallet nobody can name. Exchanges and bridges fund strangers all day, so they never count.`, rcpt: "every funding transfer" },
-  { n: "03", name: "Token transfer", art: <Transfer />, text: "A holder's first tokens came straight out of another holder's wallet, not a pool or the curve.", rcpt: "the transfer" },
-  { n: "04", name: "Fee paid by", art: <PaidBy />, text: "Another wallet signed and paid for a holder's first buy. Whoever pays the gas holds the keys, or works for whoever does.", rcpt: "the buy it paid for" },
-  { n: "05", name: "Loaded before buying", art: <Reload />, text: `The SOL that paid for the buy came from another holder, from one unnamed wallet, or from an exchange batch: ${rules.batchMin}+ near-equal withdrawals within ${rules.batchGapSec / 60} minutes. Aged wallets can't hide this one.`, rcpt: "the reload transfer" },
-  { n: "06", name: "Bought together", art: <Together />, text: `${rules.cohortMinSize}+ first buys inside ${rules.cohortSlotWindow + 1} slots, or 2+ in the block the token was created. Rated by fee payer, size, Jito tip and fresh SOL.`, rcpt: "every first buy" },
+  { n: "03", name: "Fee paid by", art: <PaidBy />, text: "Another wallet signed and paid for a holder's first buy. Whoever pays the gas holds the keys, or works for whoever does.", rcpt: "the buy it paid for" },
+  { n: "04", name: "Loaded before buying", art: <Reload />, text: `The SOL that paid for the buy came from another holder, from one unnamed wallet, or from an exchange batch: ${rules.batchMin}+ near-equal withdrawals within ${rules.batchGapSec / 60} minutes. Aged wallets can't hide this one.`, rcpt: "the reload transfer" },
+  { n: "05", name: "Bought together", art: <Together />, text: `${rules.cohortMinSize}+ first buys inside ${rules.cohortSlotWindow + 1} slots, rated by fee payer, size, Jito tip and fresh SOL.`, rcpt: "every first buy" },
+  { n: "06", name: "Launch bundle", art: <LaunchBlock />, text: `Every wallet that got the token in its creation block or the ${rules.launchWindowSlots} after it, read from the token's own history, even if it sold or moved since. Shown as bought and still held.`, rcpt: "every launch buy" },
 ];
 
 export default function Home() {

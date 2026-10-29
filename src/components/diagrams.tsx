@@ -4,14 +4,14 @@
 const C = { a: "#00d4ff", b: "#7b5cff", c: "#7cffb2", warn: "#ffb547", ink: "rgba(255,255,255,.62)", dim: "rgba(255,255,255,.16)", bg: "#0f0f11" };
 const mono = { fontFamily: "var(--font-mono)", fontStretch: "87.5%" } as const;
 
-export function Funded() {
+export function Funded({ label = "0.42 SOL · first SOL in" }: { label?: string }) {
   return (
     <svg className="dg" viewBox="0 0 280 150" aria-hidden>
       <line className="dg-draw" x1="98" y1="80" x2="190" y2="80" pathLength={100} stroke={C.a} strokeWidth="1.5" />
       <circle className="dg-pulse dg-x" cx="98" cy="80" r="3" fill={C.a} style={{ ["--dx" as string]: "92px" }} />
       <circle cx="70" cy="80" r="27" fill={C.a} stroke={C.bg} strokeWidth="3" />
       <circle className="dg-fill" cx="210" cy="80" r="19" fill={C.a} stroke={C.bg} strokeWidth="3" style={{ ["--from" as string]: C.dim }} />
-      <text className="dg-late" x="140" y="34" textAnchor="middle" fontSize="10" fill={C.ink} style={mono}>0.42 SOL · first SOL in</text>
+      <text className="dg-late" x="140" y="34" textAnchor="middle" fontSize="10" fill={C.ink} style={mono}>{label}</text>
       <text x="70" y="84" textAnchor="middle" fontSize="10" fill="rgba(0,0,0,.7)" style={mono}>A</text>
       <text x="210" y="84" textAnchor="middle" fontSize="10" fill="rgba(0,0,0,.7)" style={mono}>B</text>
       <text className="dg-late2" x="144" y="132" textAnchor="middle" fontSize="9.5" fill="rgba(255,255,255,.4)" style={mono}>receipt 4hXq…Pz9e ↗</text>
@@ -105,6 +105,25 @@ export function Reload() {
           <text className="dg-late" x={x} y="142" textAnchor="middle" fontSize="9" fill="rgba(255,255,255,.5)" style={mono}>{amt} · {t}</text>
         </g>
       ))}
+    </svg>
+  );
+}
+
+export function LaunchBlock() {
+  return (
+    <svg className="dg" viewBox="0 0 280 150" aria-hidden>
+      <rect x="40" y="26" width="76" height="98" rx="6" fill="rgba(255,107,91,.07)" stroke="rgba(255,107,91,.5)" strokeDasharray="3 3" />
+      <text x="78" y="18" textAnchor="middle" fontSize="9.5" fill="#ff6b5b" style={mono}>creation block</text>
+      <rect x="62" y="38" width="32" height="20" rx="4" fill={C.bg} stroke="rgba(255,255,255,.4)" />
+      <text x="78" y="51.5" textAnchor="middle" fontSize="8.5" fill={C.ink} style={mono}>mint</text>
+      {[[60, 82], [96, 82], [78, 108]].map(([x, y], i) => (
+        <circle key={i} className="dg-drop" style={{ animationDelay: `${0.2 + i * 0.05}s` }} cx={x} cy={y} r="11" fill="#ff6b5b" stroke={C.bg} strokeWidth="2.5" />
+      ))}
+      {[[160, 100, 7], [196, 90, 9], [236, 104, 6]].map(([x, y, r], i) => (
+        <circle key={i} className="dg-drop" style={{ animationDelay: `${1 + i * 0.3}s` }} cx={x} cy={y} r={r} fill={C.dim} stroke={C.bg} strokeWidth="2" />
+      ))}
+      <text className="dg-late" x="198" y="54" textAnchor="middle" fontSize="9.5" fill={C.ink} style={mono}>everyone else</text>
+      <text className="dg-late" x="198" y="68" textAnchor="middle" fontSize="9" fill="rgba(255,255,255,.4)" style={mono}>blocks later</text>
     </svg>
   );
 }

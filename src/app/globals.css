@@ -3463,3 +3463,38 @@ a.ca-pump:hover {
   .card + .card { border-top: 1px solid var(--line); }
   .tok-stats .stat:nth-child(5) { display: none; }
 }
+
+.venue img,
+.ca-pump img {
+  border-radius: 50%;
+}
+
+.ca-pump {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.launch {
+  margin: 0 16px 4px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 107, 91, 0.3);
+  border-radius: 10px;
+  background: rgba(255, 107, 91, 0.05);
+}
+
+.launch p {
+  margin: 8px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.launch b {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.m-h3 {
+  margin: 36px 0 10px;
+  font-size: 18px;
+  font-weight: 500;
+}

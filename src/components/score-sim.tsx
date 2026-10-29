@@ -12,12 +12,12 @@ const penalty = (k: Key, v: number) => {
 };
 
 const PRESETS: { name: string; v: Vals }[] = [
-  { name: "Clean launch", v: { top10: 18, clusters: 2, cohorts: 0, dev: 0.5, fresh: 3 } },
-  { name: "Bundled launch", v: { top10: 34, clusters: 9, cohorts: 22, dev: 0, fresh: 26 } },
-  { name: "Deployer heavy", v: { top10: 41, clusters: 14, cohorts: 4, dev: 8, fresh: 6 } },
+  { name: "Clean launch", v: { top10: 18, clusters: 2, cohorts: 0, launch: 0, dev: 0.5, fresh: 3 } },
+  { name: "Bundled launch", v: { top10: 34, clusters: 9, cohorts: 22, launch: 8, dev: 0, fresh: 26 } },
+  { name: "Deployer heavy", v: { top10: 41, clusters: 14, cohorts: 4, launch: 2, dev: 8, fresh: 6 } },
 ];
 
-const COL: Record<Key, string> = { top10: "#4da3ff", clusters: "#00d4ff", cohorts: "#ffb547", dev: "#ff6b5b", fresh: "#7b5cff" };
+const COL: Record<Key, string> = { top10: "#4da3ff", clusters: "#00d4ff", cohorts: "#ffb547", launch: "#c6f36b", dev: "#ff6b5b", fresh: "#7b5cff" };
 
 export function ScoreSim() {
   const [v, setV] = useState<Vals>(PRESETS[1].v);

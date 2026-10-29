@@ -216,3 +216,42 @@ test("two buys in the token's creation block are a high-confidence launch cohort
   assert.equal(cs[0].confidence, "high");
   assert.ok(cs[0].signals.some((s) => /created/.test(s)));
 });
+
+const xf = (direction: "in" | "out", counterparty: string, mint: string, amount: number) => ({
+  signature: `sig-x-${counterparty}-${amount}-${Math.random()}`, timestamp: 1_700_000_000, direction, counterparty, mint, symbol: null, amount,
+});
+// on-curve wallets: middlemen must be real wallets, not program accounts
+import bs58 from "bs58";
+import { ed25519 } from "@noble/curves/ed25519.js";
+const realWallet = (n: number) => bs58.encode(ed25519.getPublicKey(Uint8Array.from({ length: 32 }, (_, i) => (i * 7 + n) % 256)));
+
+test("a transfer between two top holders, of anything, links them; one receipt per transfer", () => {
+  const hs = [holder(1, 4, null, null), holder(2, 4, null, null), holder(3, 4, null, null)];
+  const SOLM = "So11111111111111111111111111111111111111112";
+  const x = new Map([[W(1), [xf("out", W(2), SOLM, 1.5)]], [W(2), [xf("in", W(1), SOLM, 1.5)]]]);
+  const { edges } = buildEdges(hs, null, "", new Set(), x, "MINT");
+  const moved = edges.filter((e) => e.type === "moved");
+  assert.equal(moved.length, 1);
+  assert.match(moved[0].receipts[0].what, /1\.5 SOL/);
+});
+
+test("a middleman needs 2+ holders and money moving like a bundle; a fee wallet everyone pays never counts", () => {
+  const hs = [1, 2, 3, 4, 5, 6].map((i) => holder(i, 2, null, null));
+  const SOLM = "So11111111111111111111111111111111111111112";
+  const M = realWallet(1), FEE = realWallet(2);
+  const x = new Map(hs.map((h, i) => [h.id, [
+    ...(i < 3 ? [xf("in", M, SOLM, 0.8)] : []),
+    xf("out", FEE, SOLM, 0.01),
+  ]]));
+  const { edges, virtual } = buildEdges(hs, null, "", new Set(), x, "MINT");
+  assert.equal(edges.filter((e) => e.type === "moved").length, 3);
+  assert.equal(virtual.length, 1);
+  assert.equal(virtual[0].label, "Middleman");
+});
+
+test("what the launch bundle still holds is scored, within its cap", () => {
+  const hs = [holder(1, 1, null, null)];
+  const s = score(hs, [], [], 30);
+  const it = s.items.find((i) => i.key === "launch")!;
+  assert.equal(it.penalty, it.max);
+});

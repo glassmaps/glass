@@ -37,6 +37,8 @@ const S0 = 371_000_000;
 type H = { owner: string; amt: number; funder: string; fundT: number; named?: boolean; slot: number; payer?: string; spent: number; tip?: number; from?: string; pre?: { from: string; lamports: number; dt: number } };
 const EXCH = wallet(); // named exchange hot wallet that sends a withdrawal batch
 const RELOADER = wallet(); // unnamed wallet that reloads aged wallets right before they buy
+const MIDDLE = wallet(); // an outside wallet that funded three holders
+const FEEWALLET = wallet(); // a bot's fee wallet every trader pays
 const hs: H[] = [];
 hs.push({ owner: CURVE, amt: 0.21, funder: "", fundT: 0, slot: S0, spent: 0 });
 hs.push({ owner: CEX_HOLDER, amt: 0.034, funder: CEX, fundT: T0 - 9e6, named: true, slot: S0 + 9000, spent: 0 });
@@ -102,6 +104,9 @@ function rpc(method: string, params: any) {
     }
     case "getTransactionsForAddress": {
       const [addr] = params;
+      if (addr === MINT && params[1]?.filters?.slot) {
+        return { result: { data: hs.filter((h) => h.slot === S0 - 2).map(firstTx), paginationToken: null } };
+      }
       if (addr === MINT) {
         return { result: { data: [{ slot: S0 - 2, blockTime: T0 - 1, transaction: { signatures: [sig()], message: { accountKeys: [{ pubkey: DEPLOYER, signer: true }], instructions: [] } }, meta: { err: null, fee: 5000, preBalances: [0], postBalances: [0] } }], paginationToken: null } };
       }
@@ -151,6 +156,20 @@ const server = createServer(async (req, res) => {
       mint: "So11111111111111111111111111111111111111111", symbol: "SOL", amount: 0.5, amountRaw: "500000000", decimals: 9,
       date: new Date(h.fundT * 1000).toISOString(), signature: fundSig.get(h.owner), timestamp: h.fundT, slot: S0 - 5000,
     });
+  }
+  const tr = url.pathname.match(/^\/v1\/wallet\/([^/]+)\/transfers$/);
+  if (tr) {
+    const i = hs.findIndex((h) => h.owner === tr[1]);
+    const data: unknown[] = [];
+    const t = (direction: string, counterparty: string, mint: string, amount: number) => data.push({ signature: sig(), timestamp: T0 - 86400 * (1 + (i % 5)), direction, counterparty, mint, symbol: mint === MINT ? "EXMPL" : "SOL", amount, amountRaw: "0", decimals: 9 });
+    const SOLM = "So11111111111111111111111111111111111111112";
+    // organic holders 30..33 passed SOL to each other weeks ago
+    if (i >= 30 && i <= 33) t("out", hs[i + 1].owner, SOLM, 1.25);
+    // one middleman funded three organic holders
+    if (i >= 40 && i <= 42) t("in", MIDDLE, SOLM, 0.8);
+    // everyone paid a trading bot's fee wallet: never a middleman
+    if (i > 2) t("out", FEEWALLET, SOLM, 0.01);
+    return send(200, { data, pagination: { hasMore: false, nextCursor: null } });
   }
   if (url.pathname === "/v1/wallet/batch-identity") {
     const { addresses } = JSON.parse(body || "{}");

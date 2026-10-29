@@ -83,6 +83,7 @@ const STEPS: { key: Stage["stage"]; label: string }[] = [
   { key: "holders", label: "Holders" },
   { key: "funding", label: "Funding sources" },
   { key: "first", label: "First buys" },
+  { key: "links", label: "Transfers between holders" },
   { key: "layout", label: "Links and layout" },
 ];
 
@@ -104,7 +105,7 @@ function Scanning({ stage }: { stage: Stage }) {
             const cls = i < at ? "done" : i === at ? "on" : "";
             let n = "";
             if (i === at && stage.stage === "holders" && stage.count) n = fmtInt(stage.count);
-            if (i === at && (stage.stage === "funding" || stage.stage === "first")) n = `${stage.done}/${stage.total}`;
+            if (i === at && (stage.stage === "funding" || stage.stage === "first" || stage.stage === "links")) n = `${stage.done}/${stage.total}`;
             return (
               <li key={s.key} className={cls}>
                 <span className="st" aria-hidden />
@@ -164,6 +165,16 @@ function ScoreTab({ d }: { d: MapResult }) {
             : "A number, not a verdict. Every point comes from a line below."}
         </p>
       </div>
+      {d.launch && (
+        <div className="launch">
+          <span className="micro">Launch bundle</span>
+          <p>
+            <b className="num">{d.launch.wallets}{d.launch.partial ? "+" : ""}</b> wallet{d.launch.wallets === 1 ? "" : "s"} got{" "}
+            <b className="num">{fmtPct(d.launch.pctBought)}</b> of supply in the creation block or the {d.launch.window} after it.
+            They still hold <b className="num">{fmtPct(d.launch.pctHeld)}</b>{d.launch.heldBy ? <>, {d.launch.heldBy} of them in the top {d.nodes.filter((n) => n.rank).length}</> : null}.
+          </p>
+        </div>
+      )}
       <ul className="items">
         {d.score.items.map((i) => (
           <li key={i.key}>
@@ -253,7 +264,7 @@ function HoldersTab({ d, pick, setPick }: { d: MapResult; pick: Pick; setPick: (
 
 const EDGE_TITLE: Record<Edge["type"], string> = {
   funded: "Funded", "shared-funder": "Same funder", transfer: "Token transfer",
-  paid: "Fee paid by", prefunded: "Loaded before buying", batch: "Exchange batch",
+  paid: "Fee paid by", prefunded: "Loaded before buying", batch: "Exchange batch", moved: "Transfer between wallets",
 };
 
 function Receipt({ e }: { e: Edge }) {
@@ -341,6 +352,7 @@ function Inspector({ d, pick, onClose }: { d: MapResult; pick: Pick; onClose: ()
                   </dd>
                 </>
               )}
+              {node.atLaunch && <><dt>Launch</dt><dd className="flag">got the token in the launch block</dd></>}
               {node.fresh && <><dt>Fresh</dt><dd className="flag">funded under 6h before buying</dd></>}
             </dl>
             <h3 className="micro">{links.length ? `Receipts · ${links.length}` : "Receipts"}</h3>

@@ -38,6 +38,7 @@ const COST = [
   { k: "Funding sources", v: W * 100, note: `${W} × funded-by at 100 credits`, c: "var(--c2)" },
   { k: "First buys", v: W * 10, note: `${W} token accounts × getTransactionsForAddress at 10`, c: "var(--c1)" },
   { k: "Reloads", v: W * 10, note: `${W} × the last SOL in before the buy at 10`, c: "var(--c5)" },
+  { k: "Transfers", v: W * 100, note: `${W} × last 100 transfers at 100`, c: "var(--c6)" },
   { k: "Names", v: Math.ceil(W / 100) * 100, note: "1 × batch-identity per 100 wallets", c: "var(--c3)" },
   { k: "Token and holders", v: 10 * (2 + limits.holderPages), note: `getAsset, deployer and up to ${limits.holderPages} holder pages at 10`, c: "var(--c4)" },
 ];
@@ -48,7 +49,7 @@ const STEPS = [
   { n: "02", t: "Holders", call: "getTokenAccounts", d: `Every token account, summed per owner. Up to ${(limits.holderPages * 1000).toLocaleString("en-US")} accounts; the top ${W} are mapped.` },
   { n: "03", t: "Funding", call: "funded-by", d: "The first SOL each wallet ever received. Cached forever: it cannot change." },
   { n: "04", t: "First buy", call: "token account history", d: "The oldest transactions of each holder's own token account: slot, payer, tip, size, source. Then the SOL that paid for it." },
-  { n: "05", t: "Rules", call: "src/lib/graph.ts", d: "Links, clusters, cohorts and the score. No model, no hand labels." },
+  { n: "05", t: "Transfers", call: "wallet transfers + mint history", d: "Every holder's last 100 transfers, and everyone who got the token in its first slots. Then the rules in src/lib/graph.ts." },
 ];
 
 export default function Method() {
@@ -66,7 +67,7 @@ export default function Method() {
               old maps are never mixed with new ones.
             </p>
             <dl className="m-facts">
-              <div><dt className="micro">Link rules</dt><dd className="num">6</dd></div>
+              <div><dt className="micro">Link rules</dt><dd className="num">8</dd></div>
               <div><dt className="micro">Cohort signals</dt><dd className="num">6</dd></div>
               <div><dt className="micro">Score inputs</dt><dd className="num">{SCORE_RULES.length}</dd></div>
               <div><dt className="micro">Labels typed by hand</dt><dd className="num">0</dd></div>
@@ -119,9 +120,11 @@ export default function Method() {
             <section id="links" className="m-sec">
               <span className="idx micro">02</span>
               <h2>Links</h2>
-              <p>A line between two bubbles has one of six causes, and each carries the transaction signature that proves it. Linked wallets form a cluster. A cluster that contains the deployer, or a wallet the deployer funded, is marked as the deployer&apos;s.</p>
+              <p>A line between two bubbles has one of eight causes, and each carries the transaction signature that proves it. Linked wallets form a cluster. A cluster that contains the deployer, or a wallet the deployer funded, is marked as the deployer&apos;s.</p>
               <div className="m-rules" data-reveal>
                 {[
+                  { n: "Moved between holders", art: <Funded label="2.5 SOL · Oct 12" />, t: "Any transfer between two top holders, of any token or SOL, at any time, from each holder's last 100 transfers. This is the link every bubble map is built on." },
+                  { n: "Middleman", art: <SameFunder />, t: "An unnamed outside wallet that sent SOL (0.05+) or this token to 2+ holders, or collected this token from them. Exchanges, named services and wallets touching 40%+ of holders are excluded: those serve everyone." },
                   { n: "Funded", art: <Funded />, t: "A top holder, or the deployer, sent another top holder its first SOL." },
                   { n: "Same funder", art: <SameFunder />, t: `${rules.sharedFunderMin}+ top holders got their first SOL from one wallet with no known name or type. Exchanges, bridges and protocols are excluded: they fund unrelated people all day.` },
                   { n: "Token transfer", art: <Transfer />, t: "A holder's first tokens came out of another holder's wallet, not a pool, curve or other program, in the same transaction." },
@@ -164,6 +167,12 @@ export default function Method() {
                 <div><span className="conf conf-medium">medium</span><p>One signal.</p></div>
                 <div><span className="conf conf-low">low</span><p>Timing alone. Shown on the map, never scored.</p></div>
               </div>
+              <h3 className="m-h3">Launch bundle</h3>
+              <p>
+                Separately, the token&apos;s own history is read from its creation slot: every wallet that received it in that block or the{" "}
+                {rules.launchWindowSlots} after it, except the deployer. Those buys were placed with the launch. The panel shows how much of the supply they got and
+                how much they still hold, and what they still hold is scored. A bundle that sold or moved its tokens still shows as bought.
+              </p>
             </section>
 
             <section id="fresh" className="m-sec">

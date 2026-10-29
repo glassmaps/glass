@@ -1,7 +1,7 @@
 // Everything a person might want to tune lives here. Thresholds are published on /method,
 // so a change here is a change to the public methodology: bump METHOD_VERSION with it.
 
-export const METHOD_VERSION = "1.1";
+export const METHOD_VERSION = "1.2";
 
 export const site = {
   name: "Glass",
@@ -44,6 +44,8 @@ export const rules = {
   batchMin: 3,
   // buys this many slots after the creation slot (or in it) count as part of the launch
   launchBlockSlots: 1,
+  // the launch bundle: wallets that received the token this many slots after creation, or in it
+  launchWindowSlots: 2,
 };
 
 export const explorer = {
@@ -55,9 +57,10 @@ export const explorer = {
 // The score starts at 100 and loses points per signal. Each signal is a share of supply (0..100):
 // penalty = min(max, max(0, share - free) * weight). The caps add up to 100.
 export const SCORE_RULES = [
-  { key: "top10", label: "Top 10 wallets", free: 20, weight: 0.5, max: 15 },
-  { key: "clusters", label: "Linked wallets", free: 0, weight: 1, max: 35 },
-  { key: "cohorts", label: "Bought together", free: 0, weight: 1, max: 30 },
+  { key: "top10", label: "Top 10 wallets", free: 20, weight: 0.5, max: 10 },
+  { key: "clusters", label: "Linked wallets", free: 0, weight: 1, max: 30 },
+  { key: "cohorts", label: "Bought together", free: 0, weight: 1, max: 25 },
+  { key: "launch", label: "Still held by the launch bundle", free: 0, weight: 1.5, max: 15 },
   { key: "dev", label: "Deployer and its links", free: 0, weight: 2, max: 15 },
   { key: "fresh", label: "Fresh wallets", free: 0, weight: 0.25, max: 5 },
 ] as const;
