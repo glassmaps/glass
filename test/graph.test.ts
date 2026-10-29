@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildClusters, buildCohorts, buildEdges, markFresh, score } from "../src/lib/graph";
-import { readFirstIn } from "../src/lib/helius";
+import { prefundFrom, readFirstIn, recentOf, type Recent } from "../src/lib/helius";
+import { readLine } from "../src/lib/stream";
 import { layout } from "../src/lib/layout";
 import type { FirstIn, Funding, Node } from "../src/lib/types";
 
@@ -254,4 +255,56 @@ test("what the launch bundle still holds is scored, within its cap", () => {
   const s = score(hs, [], [], 30);
   const it = s.items.find((i) => i.key === "launch")!;
   assert.equal(it.penalty, it.max);
+});
+
+test("one transaction draws one line: a funding that is also a transfer between holders shows once", () => {
+  const hs = [holder(1, 10, null, buy(100)), holder(2, 5, fund(W(1)), buy(200))];
+  const sig = hs[1].funding!.signature;
+  const xf = new Map([[W(2), [{ signature: sig, timestamp: 1_700_000_000, direction: "in" as const, counterparty: W(1), mint: "So11111111111111111111111111111111111111112", symbol: "SOL", amount: 0.5 }]]]);
+  const { edges } = buildEdges(hs, null, "", new Set(), xf);
+  assert.equal(edges.length, 1);
+  assert.equal(edges[0].type, "funded");
+});
+
+test("a reload is read from the recent window only when the window reaches back past the buy", () => {
+  const rec: Recent = { xfers: [], sols: [{ from: "R", lamports: 2e9, signature: "s1", slot: 90, blockTime: 1 }], oldestSlot: 80, complete: false };
+  assert.equal(prefundFrom(rec, "me", 100, "buy").found?.from, "R");
+  assert.equal(prefundFrom(rec, "me", 100, "buy").covered, true);
+  assert.equal(prefundFrom({ ...rec, oldestSlot: 150 }, "me", 100, "buy").covered, false);
+  assert.equal(prefundFrom(rec, "me", 85, "buy").found, null);
+});
+
+test("stream: a partial map is shown, never taken for the finished one", () => {
+  const map = { nodes: [], edges: [] };
+  assert.equal(readLine(JSON.stringify({ partial: map })).kind, "partial");
+  assert.equal(readLine(JSON.stringify({ result: map })).kind, "result");
+});
+
+test("a young wallet's whole history gives its funding and first buy in one read", async () => {
+  const me = W(7), F = W(8), MINT = "MINTxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+  const sys = (slot: number, from: string, to: string, lamports: number) => ({
+    slot, blockTime: 1_700_000_000 + slot,
+    transaction: { signatures: [`s${slot}`], message: { accountKeys: [{ pubkey: from, signer: true }, { pubkey: to, signer: false }], instructions: [{ program: "system", parsed: { type: "transfer", info: { source: from, destination: to, lamports } } }] } },
+    meta: { err: null, fee: 5000, preBalances: [0, 0], postBalances: [0, lamports], innerInstructions: [] },
+  });
+  const buyTx = {
+    slot: 30, blockTime: 1_700_000_030,
+    transaction: { signatures: ["s30"], message: { accountKeys: [{ pubkey: me, signer: true }], instructions: [{ programId: "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P" }] } },
+    meta: { err: null, fee: 5000, preBalances: [2e9], postBalances: [1e9], innerInstructions: [], preTokenBalances: [], postTokenBalances: [{ accountIndex: 2, mint: MINT, owner: me, uiTokenAmount: { amount: "1000", decimals: 6 } }] },
+  };
+  const data = [sys(40, me, F, 1e8), buyTx, sys(20, F, me, 9e8), sys(10, F, me, 5e8)];
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (_u: unknown, o: { body: string }) => {
+    const j = JSON.parse(o.body);
+    return new Response(JSON.stringify({ jsonrpc: "2.0", id: j.id, result: { data, paginationToken: null } }), { headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    const r = await recentOf(me, MINT, 40);
+    assert.equal(r.complete, true);
+    assert.equal(r.funding?.signature, "s10");
+    assert.equal(r.first?.signature, "s30");
+    assert.equal(prefundFrom(r, me, 30, "s30").found?.signature, "s20");
+  } finally {
+    globalThis.fetch = real;
+  }
 });

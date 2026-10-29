@@ -2,7 +2,7 @@ import { limits, METHOD_VERSION, rules, site } from "@/config/site";
 import { BURN } from "@/config/known";
 import * as cache from "./cache";
 import { isAddress, isOnCurve } from "./address";
-import { deployerOf, firstIn, fundedBy, getAsset, getHolders, identities, launchBuys, prefundOf, transfersOf, UpstreamError, type Xfer } from "./helius";
+import { deployerOf, firstIn, fundingOf, getAsset, getHolders, identities, launchBuys, prefundFrom, prefundOf, recentOf, UpstreamError, type Recent, type Xfer } from "./helius";
 import { market } from "./market";
 import { mapLimit } from "./pool";
 import { buildClusters, buildCohorts, buildEdges, markFresh, score } from "./graph";
@@ -33,12 +33,27 @@ export async function cachedMap(mint: string) {
   return cache.get<MapResult>(mapKey(mint));
 }
 
-export async function analyze(mint: string, onStage: (s: Stage) => void = () => {}): Promise<MapResult> {
+export async function analyze(
+  mint: string,
+  onStage: (s: Stage) => void = () => {},
+  onPartial: (m: MapResult) => void = () => {},
+): Promise<MapResult> {
   const t0 = Date.now();
+  const left = () => 46_000 - (Date.now() - t0);
   if (!isAddress(mint)) throw new ScanError("bad-address", "That is not a Solana address.");
   if (!process.env.HELIUS_API_KEY && !process.env.HELIUS_RPC_URL) throw new ScanError("config", "The data key is not set on this deployment.");
 
+  // ---------------------------------------------------------------- token, holders, birth, market: all at once
   onStage({ stage: "token" });
+  const birthP = (async () => {
+    const k = `dep2:${mint}`;
+    const hit = await cache.get<{ d: Awaited<ReturnType<typeof deployerOf>> }>(k);
+    if (hit) return hit.d;
+    const d = await deployerOf(mint).catch(() => null);
+    if (d) await cache.set(k, { d });
+    return d;
+  })();
+  const mktP = market(mint);
   let asset: Awaited<ReturnType<typeof getAsset>>;
   try {
     asset = await getAsset(mint);
@@ -49,20 +64,13 @@ export async function analyze(mint: string, onStage: (s: Stage) => void = () => 
   if (!asset) throw new ScanError("not-token", "No token lives at that address.");
 
   onStage({ stage: "holders" });
-  const [{ byOwner, accounts, partial }, birth, mkt] = await Promise.all([
-    getHolders(mint, limits.holderPages, (count) => onStage({ stage: "holders", count })),
-    (async () => {
-      const k = `dep2:${mint}`;
-      const hit = await cache.get<{ d: Awaited<ReturnType<typeof deployerOf>> }>(k);
-      if (hit) return hit.d;
-      const d = await deployerOf(mint).catch(() => null);
-      if (d) await cache.set(k, { d });
-      return d;
-    })(),
-    market(mint),
-  ]);
-  const deployer = birth?.deployer ?? null;
+  const { byOwner, accounts, partial } = await getHolders(mint, limits.holderPages, (count) => onStage({ stage: "holders", count }));
   if (!byOwner.size) throw new ScanError("no-holders", "This token has no holders yet.");
+  const birth = await birthP;
+  // price data never holds the map back: partial maps show it once it lands, the final map waits at most 2.5s for it
+  let mkt: Awaited<typeof mktP> = null;
+  mktP.then((m) => { mkt = m; }).catch(() => {});
+  const deployer = birth?.deployer ?? null;
 
   const scale = 10 ** asset.decimals;
   const supply = asset.supply || [...byOwner.values()].reduce((s, v) => s + v, 0) / scale;
@@ -87,196 +95,232 @@ export async function analyze(mint: string, onStage: (s: Stage) => void = () => 
     };
   });
 
+  // the launch bundle reads the mint's own history: start it now, it runs beside everything else
+  type LB = [string, { slot: number; raw: string; signature: string; feePayer: string }][];
+  const launchP = (async () => {
+    if (!birth?.slot) return null;
+    try {
+      const k = `lb:${mint}`;
+      const hit = await cache.get<{ b: LB; full: boolean }>(k);
+      if (hit) return hit;
+      const r = await launchBuys(mint, birth.slot, rules.launchWindowSlots);
+      const v = { b: [...r.buys.entries()].map(([o, x]) => [o, { ...x, raw: x.raw.toString() }]) as LB, full: r.full };
+      await cache.set(k, v);
+      return v;
+    } catch {
+      return null;
+    }
+  })();
+
   // known names: exchanges are not people, so they never join a cluster
-  const wallets = nodes.filter((n) => n.kind === "holder");
-  const ids = await identities(wallets.map((n) => n.id));
-  for (const n of wallets) {
-    const it = ids.get(n.id);
-    if (!it?.name || n.labelSource === "self") continue;
+  const named = await identities(nodes.filter((n) => n.kind === "holder").map((n) => n.id));
+  for (const n of nodes) {
+    const it = named.get(n.id);
+    if (n.kind !== "holder" || !it?.name || n.labelSource === "self") continue;
     n.label = it.name;
     n.labelSource = "helius";
     const t = `${it.type || ""} ${it.category || ""}`.toLowerCase();
     if (/exchange|cex|custod/.test(t)) n.kind = "exchange";
   }
   for (const n of nodes) if (n.isDeployer && !n.label) { n.label = "Deployer"; n.labelSource = "rule"; }
-
-  // funding source of every wallet holder: cached forever, it can never change
   const people = nodes.filter((n) => n.kind === "holder");
-  let fundingBlocked = false;
-  let done = 0;
-  const fbKeys = people.map((n) => `fb:${n.id}`);
-  const fbHits = await cache.getMany<{ f: Funding | null }>(fbKeys);
-  await mapLimit(people, limits.concurrency, async (n, i) => {
-    if (fbHits[i]) n.funding = fbHits[i]!.f;
-    else if (!fundingBlocked) {
-      try {
-        n.funding = await fundedBy(n.id);
-        await cache.set(fbKeys[i], { f: n.funding });
-      } catch (e) {
-        if (e instanceof UpstreamError && (e.status === 403 || e.status === 401)) fundingBlocked = true;
-      }
-    }
-    onStage({ stage: "funding", done: ++done, total: people.length });
-  });
-  if (fundingBlocked) notes.push("Funding sources were not read: the data key on this deployment is on a plan without the Wallet API.");
 
-  // the first time each wallet received the token, read from its own token accounts
-  done = 0;
-  const faKeys = people.map((n) => `fa:${mint}:${n.id}`);
-  const faHits = await cache.getMany<{ t: FirstIn | null }>(faKeys);
-  const retry: number[] = [];
-  let limited = false;
-  let firstErr = "";
-  const readFirst = async (i: number, tries: number) => {
-    const n = people[i];
-    const accts = (accounts.get(n.id) || []).map((a) => a.address);
-    n.first = await firstIn(n.id, mint, accts, tries);
-    if (n.first) await cache.set(faKeys[i], { t: n.first });
+  // ---------------------------------------------------------------- assemble a map from whatever is known so far
+  const xfers = new Map<string, Xfer[]>();
+  const known = new Set<string>();
+  let launch: MapResult["launch"] = null;
+  let firstMissing = 0, firstErr = "", limited = false;
+  // an outside wallet is only allowed to join holders once its name has been checked:
+  // an exchange must never show up as a shared funder, not even for a second
+  const checked = new Set<string>();
+  const outsideNow = () => {
+    const out = new Set<string>();
+    for (const n of people) {
+      if (n.funding && !byOwner.has(n.funding.funder)) out.add(n.funding.funder);
+      if (n.prefund && !byOwner.has(n.prefund.from)) out.add(n.prefund.from);
+      if (n.first && n.first.feePayer !== n.id && !byOwner.has(n.first.feePayer)) out.add(n.first.feePayer);
+    }
+    const touch = new Map<string, number>();
+    for (const list of xfers.values()) for (const cp of new Set(list.map((t) => t.counterparty))) if (!byOwner.has(cp)) touch.set(cp, (touch.get(cp) || 0) + 1);
+    for (const [a, c] of touch) if (c >= 2) out.add(a);
+    return out;
+  };
+  let inflight: Promise<void> | null = null;
+  const lookup = (): Promise<void> => {
+    if (inflight) return inflight;
+    const todo = [...outsideNow()].filter((a) => !checked.has(a)).slice(0, 500);
+    if (!todo.length) return Promise.resolve();
+    inflight = identities(todo)
+      .then((names) => {
+        for (const a of todo) checked.add(a);
+        for (const a of names.keys()) known.add(a);
+        for (const n of people) {
+          const f = n.funding && names.get(n.funding.funder);
+          if (n.funding && f) { n.funding.funderName = f.name || null; n.funding.funderType = f.type || f.category || null; }
+          const pf = n.prefund && names.get(n.prefund.from);
+          if (n.prefund && pf) { n.prefund.fromName = pf.name || null; n.prefund.fromType = pf.type || pf.category || null; }
+        }
+      })
+      .catch(() => { for (const a of todo) checked.add(a); })
+      .finally(() => { inflight = null; });
+    return inflight;
+  };
+  const assemble = (final: boolean): MapResult => {
+    // the rules mutate nodes; partial maps work on copies so the next pass starts clean,
+    // and leave out every outside wallet whose name is not checked yet
+    const ok = (a: string) => byOwner.has(a) || checked.has(a);
+    const ns: Node[] = final ? nodes : nodes.map((n) => ({
+      ...n, cluster: null, cohort: null,
+      funding: n.funding && ok(n.funding.funder) ? n.funding : null,
+      prefund: n.prefund && ok(n.prefund.from) ? n.prefund : null,
+      first: n.first && n.first.feePayer !== n.id && !ok(n.first.feePayer) ? { ...n.first, feePayer: n.id } : n.first,
+    }));
+    const xf = final ? xfers : new Map([...xfers].map(([id, l]) => [id, l.filter((t) => ok(t.counterparty))]));
+    markFresh(ns);
+    const { edges, virtual } = buildEdges(ns, deployer, asset!.symbol, known, xf, mint);
+    const clusters = buildClusters(ns, virtual, edges);
+    const cohorts = buildCohorts(ns, birth?.slot ?? null);
+    const sc = score(ns, clusters, cohorts, launch?.pctHeld ?? 0);
+    const all = [...ns, ...virtual];
+    layout(all, edges);
+    return {
+      v: 1, method: METHOD_VERSION,
+      token: {
+        mint, name: asset!.name, symbol: asset!.symbol, image: asset!.image, decimals: asset!.decimals, supply, deployer,
+        priceUsd: mkt?.priceUsd ?? null, mcapUsd: mkt?.mcapUsd ?? null, liquidityUsd: mkt?.liquidityUsd ?? null, pairUrl: mkt?.pairUrl ?? null,
+        pairAddress: mkt?.pairAddress ?? null, volume24hUsd: mkt?.volume24hUsd ?? null, createdSlot: birth?.slot ?? null,
+      },
+      holdersTotal: byOwner.size, partial,
+      nodes: all, edges, clusters, cohorts, score: sc,
+      scannedAt: Date.now(), ms: Date.now() - t0, self, notes: [...notes],
+      complete: final ? firstMissing <= people.length * 0.2 : false,
+      launch,
+    };
+  };
+
+  // ---------------------------------------------------------------- per-wallet reads, biggest holders first, all paced by the limiter
+  const recent = new Map<string, Recent>();
+  const readsP = (async () => {
+  const k = (p: string, id: string) => `${p}:${id}`;
+  const [fbHits, faHits, rcHits] = await Promise.all([
+    cache.getMany<{ f: Funding | null }>(people.map((n) => k("fb2", n.id))),
+    cache.getMany<{ t: FirstIn | null }>(people.map((n) => `fa:${mint}:${n.id}`)),
+    cache.getMany<{ r: Recent }>(people.map((n) => k("rc", n.id))),
+  ]);
+  people.forEach((n, i) => {
+    if (fbHits[i]) n.funding = fbHits[i]!.f;
+    if (faHits[i]?.t) n.first = faHits[i]!.t;
+    if (rcHits[i]) recent.set(n.id, rcHits[i]!.r);
+  });
+
+  // one wallet = one history read when its whole history fits the window (fresh and bundler wallets do);
+  // aged wallets add one read for their first SOL and one for their first buy
+  let done = 0;
+  const total = people.length;
+  let lastPartial = Date.now();
+  const tick = () => {
+    onStage({ stage: "links", done: ++done, total });
+    if (done % 8 === 0) void lookup();
+    if (Date.now() - lastPartial > 1100) {
+      lastPartial = Date.now();
+      for (const [id, r] of recent) xfers.set(id, r.xfers);
+      onPartial(assemble(false));
+    }
   };
   const note = (e: unknown) => {
+    firstMissing++;
     if (e instanceof UpstreamError && e.status === 429) limited = true;
     if (!firstErr) firstErr = (e instanceof Error ? e.message : String(e)).replace(/api-key=[^&\s]+/g, "api-key=…").replace(/\s+/g, " ").slice(0, 120);
   };
-  await mapLimit(people, limits.concurrency, async (n, i) => {
-    if (faHits[i]?.t) n.first = faHits[i]!.t;
-    else {
+  await mapLimit(people, 24, async (n, i) => {
+    if (left() < 0) { if (!n.first) firstMissing++; tick(); return; }
+    let r = recent.get(n.id);
+    if (!r) {
       try {
-        await readFirst(i, 3);
-      } catch (e) {
-        note(e);
-        retry.push(i);
+        r = await recentOf(n.id, mint);
+        recent.set(n.id, r);
+        await cache.set(k("rc", n.id), { r }, 6 * 3600);
+      } catch {
+        /* the wallet reads below still run */
       }
     }
-    if (!retry.includes(i)) onStage({ stage: "first", done: ++done, total: people.length });
-  });
-  // go again, slowly, while the request still has time
-  let firstMissing = 0;
-  await mapLimit(retry, 2, async (i) => {
-    if (Date.now() - t0 > 34_000) { firstMissing++; return; }
-    try {
-      await readFirst(i, 6);
-    } catch (e) {
-      note(e);
-      firstMissing++;
+    const tasks: Promise<unknown>[] = [];
+    if (!fbHits[i]) {
+      if (r && r.funding !== undefined) {
+        n.funding = r.funding;
+        tasks.push(cache.set(k("fb2", n.id), { f: n.funding }));
+      } else {
+        tasks.push(fundingOf(n.id).then((f) => { n.funding = f; return cache.set(k("fb2", n.id), { f }); }).catch(() => {}));
+      }
     }
-    onStage({ stage: "first", done: ++done, total: people.length });
+    if (!n.first) {
+      if (r && r.first !== undefined && r.first) {
+        n.first = r.first;
+        tasks.push(cache.set(`fa:${mint}:${n.id}`, { t: n.first }));
+      } else {
+        const accts = (accounts.get(n.id) || []).map((a) => a.address);
+        tasks.push(firstIn(n.id, mint, accts, 3).then((t) => { n.first = t; return t ? cache.set(`fa:${mint}:${n.id}`, { t }) : null; }).catch(note));
+      }
+    }
+    await Promise.all(tasks);
+    tick();
   });
-  if (firstMissing) {
-    console.error("first-buy reads failed", mint, firstMissing, firstErr);
-    notes.push(
-      `First buys could not be read for ${firstMissing} of ${people.length} wallets${limited ? ", because the data key hit its plan's rate limit" : ""}; they are left out of cohorts. Provider said: ${firstErr || "no answer"}.`,
-    );
-  }
+  })();
+  // the reads are in flight; the bubbles go on screen while the links are still being read
+  onPartial(assemble(false));
+  await readsP;
 
-  // the reload right before each first buy: aged wallets hide behind old funding, not behind this
+  // the reload before each first buy: from the recent window when it reaches back far enough, otherwise one more read
   const buyers = people.filter((n) => n.first && n.first.slot);
   const pfKeys = buyers.map((n) => `pf:${mint}:${n.id}`);
   const pfHits = await cache.getMany<{ p: PreFund | null }>(pfKeys);
-  await mapLimit(buyers, limits.concurrency, async (n, i) => {
+  await mapLimit(buyers, 24, async (n, i) => {
     if (pfHits[i]) { n.prefund = pfHits[i]!.p; return; }
-    if (Date.now() - t0 > 44_000) return;
+    const r = recent.get(n.id);
+    if (r) {
+      const { found, covered } = prefundFrom(r, n.id, n.first!.slot, n.first!.signature);
+      if (covered) { n.prefund = found; await cache.set(pfKeys[i], { p: found }); return; }
+    }
+    if (left() < 0) return;
     try {
       n.prefund = await prefundOf(n.id, n.first!.slot, n.first!.signature);
       await cache.set(pfKeys[i], { p: n.prefund });
     } catch {
-      /* optional: the map stands without it */
+      /* optional */
     }
   });
-  // who sent those reloads, and who paid for the buys: an exchange is not a person, an unnamed wallet might be
-  const outside = [...new Set([
-    ...buyers.map((n) => n.prefund?.from),
-    ...buyers.map((n) => (n.first!.feePayer !== n.id ? n.first!.feePayer : null)),
-  ].filter((a): a is string => Boolean(a) && !byOwner.has(a!)))];
-  const named = outside.length ? await identities(outside) : new Map();
-  for (const n of buyers) {
-    const it = n.prefund && named.get(n.prefund.from);
-    if (n.prefund && it) { n.prefund.fromName = it.name || null; n.prefund.fromType = it.type || it.category || null; }
+  for (const [id, r] of recent) xfers.set(id, r.xfers);
+
+  // ---------------------------------------------------------------- names for everyone outside the holder list
+  while ([...outsideNow()].some((a) => !checked.has(a))) await lookup();
+
+  // ---------------------------------------------------------------- launch bundle
+  const lb = await launchP;
+  if (lb?.b.length) {
+    const bundle = lb.b.filter(([o]) => o !== deployer);
+    if (bundle.length) {
+      const bought = bundle.reduce((t, [, v]) => t + Number(v.raw), 0) / scale;
+      const held = bundle.reduce((t, [o]) => t + (byOwner.get(o) || 0), 0) / scale;
+      const inTop = new Set(nodes.map((n) => n.id));
+      for (const [o] of bundle) { const n = nodes.find((x) => x.id === o); if (n) n.atLaunch = true; }
+      launch = {
+        slot: birth!.slot, wallets: bundle.length, window: rules.launchWindowSlots, partial: lb.full,
+        pctBought: supply ? (bought / supply) * 100 : 0, pctHeld: supply ? (held / supply) * 100 : 0,
+        heldBy: bundle.filter(([o]) => inTop.has(o)).length,
+      };
+    }
   }
-  const knownPayers = new Set([...named.keys()]);
 
-  // every holder's recent transfers: direct links between holders, and the middlemen between them
-  const xfers = new Map<string, Xfer[]>();
-  done = 0;
-  let xferBlocked = false;
-  const txKeys = people.map((n) => `tx:${n.id}`);
-  const txHits = await cache.getMany<{ x: Xfer[] }>(txKeys);
-  await mapLimit(people, limits.concurrency, async (n, i) => {
-    if (txHits[i]) xfers.set(n.id, txHits[i]!.x);
-    else if (!xferBlocked && Date.now() - t0 < 46_000) {
-      try {
-        // keep only what the rules can use, so the cache stays small
-        const list = (await transfersOf(n.id)).map(({ signature, timestamp, direction, counterparty, mint: m, symbol, amount }) => ({ signature, timestamp, direction, counterparty, mint: m, symbol, amount }));
-        xfers.set(n.id, list);
-        await cache.set(txKeys[i], { x: list }, 6 * 3600);
-      } catch (e) {
-        if (e instanceof UpstreamError && (e.status === 403 || e.status === 401)) xferBlocked = true;
-      }
-    }
-    onStage({ stage: "links", done: ++done, total: people.length });
-  });
-  if (xferBlocked) notes.push("Transfers between holders were not read: the data key's plan does not include the Wallet API.");
-  // outside wallets that touched 2+ holders: ask who they are, so exchanges and services never become middlemen
-  const touch = new Map<string, number>();
-  for (const list of xfers.values()) for (const cp of new Set(list.map((t) => t.counterparty))) if (!byOwner.has(cp)) touch.set(cp, (touch.get(cp) || 0) + 1);
-  const shared = [...touch.entries()].filter(([, c]) => c >= 2).sort((a, b) => b[1] - a[1]).slice(0, 300).map(([a]) => a);
-  const sharedNames = shared.length ? await identities(shared) : new Map();
-  for (const a of sharedNames.keys()) knownPayers.add(a);
-
-  // the launch bundle: who received the token in its first slots, and how much of it they still hold
-  let launch: MapResult["launch"] = null;
-  if (birth?.slot) {
-    try {
-      const k = `lb:${mint}`;
-      const hit = await cache.get<{ b: [string, { slot: number; raw: string; signature: string; feePayer: string }][]; full: boolean }>(k);
-      let entries = hit?.b;
-      let full = hit?.full ?? false;
-      if (!entries) {
-        const r = await launchBuys(mint, birth.slot, rules.launchWindowSlots);
-        entries = [...r.buys.entries()].map(([o, v]) => [o, { ...v, raw: v.raw.toString() }]);
-        full = r.full;
-        await cache.set(k, { b: entries, full });
-      }
-      const bundle = entries.filter(([o]) => o !== deployer);
-      if (bundle.length) {
-        const bought = bundle.reduce((t, [, v]) => t + Number(v.raw), 0) / scale;
-        const held = bundle.reduce((t, [o]) => t + (byOwner.get(o) || 0), 0) / scale;
-        const inTop = new Set(nodes.map((n) => n.id));
-        for (const [o] of bundle) { const n = nodes.find((x) => x.id === o); if (n) n.atLaunch = true; }
-        launch = {
-          slot: birth.slot, wallets: bundle.length, window: rules.launchWindowSlots, partial: full,
-          pctBought: supply ? (bought / supply) * 100 : 0, pctHeld: supply ? (held / supply) * 100 : 0,
-          heldBy: bundle.filter(([o]) => inTop.has(o)).length,
-        };
-      }
-    } catch {
-      /* the map stands without it */
-    }
+  if (firstMissing) {
+    console.error("first-buy reads failed", mint, firstMissing, firstErr);
+    notes.push(`First buys could not be read for ${firstMissing} of ${people.length} wallets${limited ? ", because the data key hit its plan's rate limit" : ""}; they are left out of cohorts. Provider said: ${firstErr || "no answer"}.`);
   }
 
   onStage({ stage: "layout" });
-  markFresh(nodes);
-  const { edges, virtual } = buildEdges(nodes, deployer, asset.symbol, knownPayers, xfers, mint);
-  const clusters = buildClusters(nodes, virtual, edges);
-  const cohorts = buildCohorts(nodes, birth?.slot ?? null);
-  const sc = score(nodes, clusters, cohorts, launch?.pctHeld ?? 0);
-  const all = [...nodes, ...virtual];
-  layout(all, edges);
-
-  const result: MapResult = {
-    v: 1, method: METHOD_VERSION,
-    token: {
-      mint, name: asset.name, symbol: asset.symbol, image: asset.image, decimals: asset.decimals, supply, deployer,
-      priceUsd: mkt?.priceUsd ?? null, mcapUsd: mkt?.mcapUsd ?? null, liquidityUsd: mkt?.liquidityUsd ?? null, pairUrl: mkt?.pairUrl ?? null,
-      pairAddress: mkt?.pairAddress ?? null, volume24hUsd: mkt?.volume24hUsd ?? null, createdSlot: birth?.slot ?? null,
-    },
-    holdersTotal: byOwner.size, partial,
-    nodes: all, edges, clusters, cohorts, score: sc,
-    scannedAt: Date.now(), ms: Date.now() - t0, self, notes,
-    complete: !fundingBlocked && firstMissing <= people.length * 0.2,
-    launch,
-  };
+  if (!mkt) mkt = await Promise.race([mktP.catch(() => null), new Promise<null>((r) => setTimeout(() => r(null), 2500))]);
+  const result = assemble(true);
   await cache.set(mapKey(mint), result, limits.scanTtl);
   // our own token never appears in the public "mapped recently" list
-  if (!isOwn(mint, asset.symbol)) await cache.pushRecent({ mint, name: asset.name, symbol: asset.symbol, image: asset.image, score: sc.total, band: sc.band, at: result.scannedAt });
+  if (!isOwn(mint, asset.symbol)) await cache.pushRecent({ mint, name: asset.name, symbol: asset.symbol, image: asset.image, score: result.score.total, band: result.score.band, at: result.scannedAt });
   return result;
 }

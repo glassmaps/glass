@@ -113,21 +113,31 @@ function rpc(method: string, params: any) {
       // a holder's token account: its oldest transaction is the first receipt
       const ha = byAccount.get(addr);
       if (ha) return { result: { data: [firstTx(ha)], paginationToken: null } };
-      // a wallet, newest first, up to its first buy: the reload before it
       const h = byOwner.get(addr);
+      const sys = (slot: number, ts: number, from: string, to: string, lamports: number) => ({
+        slot, blockTime: Math.round(ts),
+        transaction: { signatures: [sig()], message: { accountKeys: [{ pubkey: from, signer: true }, { pubkey: to, signer: false }], instructions: [{ program: "system", parsed: { type: "transfer", info: { source: from, destination: to, lamports } } }] } },
+        meta: { err: null, fee: 5000, preBalances: [0, 0], postBalances: [0, lamports], innerInstructions: [] },
+      });
+      // a wallet, oldest first: its first SOL in is the funding
+      if (h && params[1]?.sortOrder !== "desc" && !params[1]?.filters?.tokenAccounts) {
+        if (!h.funder) return { result: { data: [], paginationToken: null } };
+        return { result: { data: [sys(S0 - 5000, h.fundT, h.funder, h.owner, 500_000_000)], paginationToken: null } };
+      }
+      // a wallet, newest first: its recent SOL moves, and the reload right before its first buy
       if (h && params[1]?.sortOrder === "desc") {
-        if (!h.pre) return { result: { data: [], paginationToken: null } };
-        const t = T0 + (h.slot - S0) * 0.4 - h.pre.dt;
-        return {
-          result: {
-            data: [{
-              slot: h.slot - Math.round(h.pre.dt / 0.4), blockTime: Math.round(t),
-              transaction: { signatures: [sig()], message: { accountKeys: [{ pubkey: h.pre.from, signer: true }, { pubkey: h.owner, signer: false }], instructions: [{ program: "system", parsed: { type: "transfer", info: { source: h.pre.from, destination: h.owner, lamports: h.pre.lamports } } }] } },
-              meta: { err: null, fee: 5000, preBalances: [0, 0], postBalances: [0, h.pre.lamports], innerInstructions: [] },
-            }],
-            paginationToken: null,
-          },
-        };
+        const i = hs.indexOf(h);
+        const data: unknown[] = [];
+        const old = T0 - 86400 * (1 + (i % 5));
+        if (i > 2) data.push(sys(h.slot + 900, T0 + 5000, h.owner, FEEWALLET, 10_000_000));
+        if (i >= 30 && i <= 33) data.push(sys(h.slot - 90000, old, h.owner, hs[i + 1].owner, 1_250_000_000));
+        if (i >= 40 && i <= 42) data.push(sys(h.slot - 90000, old, MIDDLE, h.owner, 800_000_000));
+        if (h.pre) data.push(sys(h.slot - Math.round(h.pre.dt / 0.4), T0 + (h.slot - S0) * 0.4 - h.pre.dt, h.pre.from, h.owner, h.pre.lamports));
+        // the whole history of a young wallet: its funding and its first buy are in the same window
+        if (h.funder) data.push(sys(S0 - 5000 - (h.pre ? 2_000_000 : 0), h.fundT, h.funder, h.owner, 500_000_000));
+        data.push(firstTx(h));
+        data.sort((a: any, b: any) => b.slot - a.slot);
+        return { result: { data, paginationToken: null } };
       }
       // the old owner-level call with a token filter: refused, like the real provider did for most wallets
       if (h) return { error: { code: -32602, message: "mock: owner-level token filter refused" } };
@@ -173,7 +183,7 @@ const server = createServer(async (req, res) => {
   }
   if (url.pathname === "/v1/wallet/batch-identity") {
     const { addresses } = JSON.parse(body || "{}");
-    return send(200, (addresses || []).filter((a: string) => a === CEX_HOLDER || a === EXCH).map((a: string) => ({ address: a, type: "exchange", name: a === EXCH ? "Binance Hot Wallet 2" : "Binance 2", category: "Centralized Exchange", tags: [] })));
+    return send(200, (addresses || []).filter((a: string) => a === CEX_HOLDER || a === EXCH || a === CEX).map((a: string) => ({ address: a, type: "exchange", name: a === EXCH ? "Binance Hot Wallet 2" : "Binance 2", category: "Centralized Exchange", tags: [] })));
   }
   if (req.method === "POST") {
     const j = JSON.parse(body);

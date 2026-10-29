@@ -1,7 +1,9 @@
 import { sleep } from "./pool";
+import { classOf, take } from "./limiter";
 import { isOnCurve } from "./address";
 import { JITO_TIP, PROGRAMS } from "@/config/known";
 import type { FirstIn, Funding, PreFund } from "./types";
+import * as cache from "./cache";
 
 const KEY = process.env.HELIUS_API_KEY || "";
 const RPC = process.env.HELIUS_RPC_URL || `https://mainnet.helius-rpc.com/?api-key=${KEY}`;
@@ -34,8 +36,9 @@ async function withRetry<T>(run: () => Promise<Response>, parse: (r: Response) =
 let rid = 0;
 export async function rpc<T>(method: string, params: unknown, tries = 4): Promise<T> {
   const body = JSON.stringify({ jsonrpc: "2.0", id: ++rid, method, params });
+  const cls = classOf(method);
   return withRetry(
-    () => fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body, cache: "no-store" }),
+    async () => (await take(cls), fetch(RPC, { method: "POST", headers: { "content-type": "application/json" }, body, cache: "no-store" })),
     async (r) => {
       const j = (await r.json()) as { result?: T; error?: { code: number; message: string } };
       if (j.error) throw new UpstreamError(400, `${method}: ${j.error.message}`);
@@ -48,12 +51,12 @@ export async function rpc<T>(method: string, params: unknown, tries = 4): Promis
 async function wallet<T>(path: string, init?: RequestInit): Promise<T | null> {
   try {
     return await withRetry(
-      () =>
-        fetch(`${API}${path}`, {
+      async () =>
+        (await take("wallet"), fetch(`${API}${path}`, {
           ...init,
           headers: { "X-Api-Key": KEY, "content-type": "application/json", ...(init?.headers || {}) },
           cache: "no-store",
-        }),
+        })),
       (r) => r.json() as Promise<T>,
     );
   } catch (e) {
@@ -151,6 +154,15 @@ interface Identity {
 /** Known names (exchanges, protocols, market makers) for up to 100 addresses per call. Missing ones are simply absent. */
 export async function identities(addresses: string[]): Promise<Map<string, Identity>> {
   const out = new Map<string, Identity>();
+  // names barely change: remember them, and remember who has none, for a week
+  const uniq = [...new Set(addresses)];
+  const hits = await cache.getMany<{ i: Identity | null }>(uniq.map((a) => `id:${a}`));
+  const missing: string[] = [];
+  uniq.forEach((a, i) => {
+    const h = hits[i];
+    if (h) { if (h.i) out.set(a, h.i); } else missing.push(a);
+  });
+  addresses = missing;
   for (let i = 0; i < addresses.length; i += 100) {
     try {
       const r = await wallet<unknown>(`/v1/wallet/batch-identity`, {
@@ -162,7 +174,9 @@ export async function identities(addresses: string[]): Promise<Map<string, Ident
         : Array.isArray((r as { data?: unknown })?.data)
           ? ((r as { data: Identity[] }).data)
           : [];
-      for (const it of list) if (it && it.address && it.name) out.set(it.address, it);
+      const named = new Set<string>();
+      for (const it of list) if (it && it.address && it.name) { out.set(it.address, it); named.add(it.address); }
+      await Promise.all(addresses.slice(i, i + 100).map((a) => cache.set(`id:${a}`, { i: named.has(a) ? out.get(a)! : null }, 7 * 86400)));
     } catch {
       /* labels are a nice-to-have; the map is complete without them */
     }
@@ -265,6 +279,118 @@ export async function launchBuys(mint: string, createdSlot: number, slots: numbe
     }
   }
   return { buys: out, full: (r.data || []).length >= 100 };
+}
+
+const SOLM = "So11111111111111111111111111111111111111112";
+
+function allIx(tx: FullTx): Parsed[] {
+  return [...tx.transaction.message.instructions, ...((tx.meta?.innerInstructions || []).flatMap((x) => x.instructions))];
+}
+
+/** SOL that moved straight between two wallets in this transaction (system transfers and account creation). */
+function solMoves(tx: FullTx) {
+  const out: { from: string; to: string; lamports: number }[] = [];
+  for (const ix of allIx(tx)) {
+    if (ix.program !== "system") continue;
+    const ty = ix.parsed?.type, info = ix.parsed?.info || {};
+    if (ty === "transfer" || ty === "transferWithSeed") out.push({ from: String(info.source), to: String(info.destination), lamports: Number(info.lamports) || 0 });
+    else if (ty === "createAccount" || ty === "createAccountWithSeed") out.push({ from: String(info.source), to: String(info.newAccount), lamports: Number(info.lamports) || 0 });
+  }
+  return out;
+}
+
+/**
+ * Where a wallet's first SOL came from, read from its own oldest transactions over plain RPC.
+ * Same answer as the Wallet API's funded-by, at five times the rate limit; names are added afterwards in one batch.
+ */
+export async function fundingOf(address: string, tries = 3): Promise<Funding | null> {
+  const r = await gtfa(address, {}, 5, tries, "asc");
+  for (const tx of r.data || []) {
+    if (!tx.meta || tx.meta.err) continue;
+    const m = solMoves(tx).filter((x) => x.to === address && x.from !== address && x.lamports > 0).sort((a, b) => b.lamports - a.lamports)[0];
+    if (m) return { funder: m.from, funderName: null, funderType: null, amount: m.lamports / 1e9, signature: tx.transaction.signatures[0], timestamp: tx.blockTime || 0, slot: tx.slot };
+  }
+  return null;
+}
+
+export interface Recent {
+  xfers: Xfer[];
+  sols: { from: string; lamports: number; signature: string; slot: number; blockTime: number }[]; // SOL received, newest first
+  oldestSlot: number; // how far back the window reaches
+  complete: boolean; // the window holds the wallet's whole history
+  // when the window is the whole history, the oldest SOL in and the first buy are already in it: no extra reads
+  funding?: Funding | null;
+  first?: FirstIn | null;
+}
+
+/**
+ * A wallet's latest transactions, read once and used twice: transfers to and from other wallets
+ * (for links between holders and middlemen) and the SOL it received (for the reload before its first buy).
+ */
+export async function recentOf(address: string, mint: string, size = 60, tries = 3): Promise<Recent> {
+  // token transfers land on the wallet's token accounts, not the wallet: ask for those too, and fall back if refused
+  let withTokens = true;
+  const r = await gtfa(address, { tokenAccounts: "balanceChanged" }, size, tries, "desc").catch(() => {
+    withTokens = false;
+    return gtfa(address, {}, size, tries, "desc");
+  });
+  const txs = (r.data || []).filter((t) => t.meta && !t.meta.err);
+  const xfers: Xfer[] = [];
+  const sols: Recent["sols"] = [];
+  for (const tx of txs) {
+    const sig = tx.transaction.signatures[0], ts = tx.blockTime || 0;
+    for (const m of solMoves(tx)) {
+      if (m.lamports <= 0) continue;
+      if (m.to === address && m.from !== address) {
+        xfers.push({ signature: sig, timestamp: ts, direction: "in", counterparty: m.from, mint: SOLM, symbol: "SOL", amount: m.lamports / 1e9 });
+        sols.push({ from: m.from, lamports: m.lamports, signature: sig, slot: tx.slot, blockTime: ts });
+      } else if (m.from === address && m.to !== address) {
+        xfers.push({ signature: sig, timestamp: ts, direction: "out", counterparty: m.to, mint: SOLM, symbol: "SOL", amount: m.lamports / 1e9 });
+      }
+    }
+    // token movements: who gained what this wallet lost, and the other way round (pools are program accounts, filtered by the rules)
+    const delta = new Map<string, Map<string, { d: bigint; dec: number }>>();
+    const add = (b: TokBal, sign: 1n | -1n) => {
+      if (!b.owner) return;
+      const byOwner = delta.get(b.mint) || new Map();
+      const cur = byOwner.get(b.owner) || { d: 0n, dec: b.uiTokenAmount.decimals };
+      cur.d += sign * BigInt(b.uiTokenAmount.amount);
+      byOwner.set(b.owner, cur);
+      delta.set(b.mint, byOwner);
+    };
+    for (const b of tx.meta!.postTokenBalances || []) add(b, 1n);
+    for (const b of tx.meta!.preTokenBalances || []) add(b, -1n);
+    for (const [m, owners] of delta) {
+      if (m === SOLM) continue;
+      const mine = owners.get(address);
+      if (!mine || mine.d === 0n) continue;
+      const dir: "in" | "out" = mine.d > 0n ? "in" : "out";
+      for (const [o, v] of owners) {
+        if (o === address || v.d === 0n || (v.d > 0n) === (mine.d > 0n)) continue;
+        const amt = Number(v.d < 0n ? -v.d : v.d) / 10 ** v.dec;
+        xfers.push({ signature: sig, timestamp: ts, direction: dir, counterparty: o, mint: m, symbol: m === mint ? null : null, amount: amt });
+      }
+    }
+  }
+  const complete = (r.data || []).length < size;
+  const out: Recent = { xfers, sols, oldestSlot: txs.length ? txs[txs.length - 1].slot : 0, complete };
+  if (complete) {
+    const oldestIn = [...sols].reverse()[0];
+    const ftx = txs.find((t) => t.slot === oldestIn?.slot && t.transaction.signatures[0] === oldestIn?.signature);
+    out.funding = oldestIn ? { funder: oldestIn.from, funderName: null, funderType: null, amount: oldestIn.lamports / 1e9, signature: oldestIn.signature, timestamp: ftx?.blockTime || oldestIn.blockTime, slot: oldestIn.slot } : null;
+    // only trust "no first buy here" when token-account history was included
+    const buy = [...txs].reverse().find((t) => received(t, address, mint));
+    const read = buy ? readFirstIn(buy, address, mint) : null;
+    if (read || withTokens) out.first = read;
+  }
+  return out;
+}
+
+/** The reload before a first buy, from a recent window when it reaches back far enough. */
+export function prefundFrom(rec: Recent, owner: string, beforeSlot: number, skipSig: string): { found: PreFund | null; covered: boolean } {
+  const covered = rec.complete || rec.oldestSlot <= beforeSlot;
+  const s = rec.sols.find((x) => x.slot <= beforeSlot && x.signature !== skipSig && x.lamports >= 5_000_000 && x.from !== owner);
+  return { found: s ? { from: s.from, fromName: null, fromType: null, lamports: s.lamports, signature: s.signature, slot: s.slot, blockTime: s.blockTime } : null, covered };
 }
 
 /** Did `owner`'s balance of `mint` go up in this transaction? */

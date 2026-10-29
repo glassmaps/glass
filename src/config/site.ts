@@ -1,7 +1,7 @@
 // Everything a person might want to tune lives here. Thresholds are published on /method,
 // so a change here is a change to the public methodology: bump METHOD_VERSION with it.
 
-export const METHOD_VERSION = "1.2";
+export const METHOD_VERSION = "1.3";
 
 export const site = {
   name: "Glass",

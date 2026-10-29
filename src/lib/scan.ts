@@ -54,7 +54,7 @@ export async function handleScan(req: Request, mint: string, opts: { cors?: bool
     }
   }
 
-  // NDJSON: one line per stage ({ stage, done, total }), the last line is { result } or { error }
+  // NDJSON: stage lines ({ stage, done, total }), partial maps ({ partial }), the last line is { result } or { error }
   const enc = new TextEncoder();
   const body = new ReadableStream({
     async start(ctl) {
@@ -68,7 +68,9 @@ export async function handleScan(req: Request, mint: string, opts: { cors?: bool
         send(s);
       };
       try {
-        send({ result: await analyze(mint, onStage) });
+        // a partial map is sent as soon as holders are known, then again as links land
+        const onPartial = (m: unknown) => send({ partial: m });
+        send({ result: await analyze(mint, onStage, onPartial) });
       } catch (e) {
         const err = e instanceof ScanError ? e : new ScanError("upstream", "The scan failed upstream. Try again in a moment.");
         if (!(e instanceof ScanError)) console.error("scan", mint, e);

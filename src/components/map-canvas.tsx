@@ -33,8 +33,43 @@ interface View {
   y: number;
 }
 
+/** Between a partial map and the next one, every bubble glides to its new place instead of jumping. */
+function useTween(target: MapResult, ms = 520) {
+  const [shown, setShown] = useState(target);
+  const last = useRef<Map<string, { x: number; y: number; r: number }>>(new Map());
+  useEffect(() => {
+    const from = last.current;
+    const reduce = typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const save = () => { last.current = new Map(target.nodes.map((n) => [n.id, { x: n.x, y: n.y, r: n.r }])); };
+    if (reduce || !from.size || from.size && target.nodes.every((n) => { const f = from.get(n.id); return f && f.x === n.x && f.y === n.y; })) {
+      setShown(target);
+      save();
+      return;
+    }
+    const t0 = performance.now();
+    let raf = 0;
+    const ease = (t: number) => 1 - Math.pow(1 - t, 3);
+    const step = (now: number) => {
+      const t = ease(Math.min(1, Math.max(0, (now - t0) / ms)));
+      setShown({
+        ...target,
+        nodes: target.nodes.map((n) => {
+          const f = from.get(n.id);
+          if (!f) return { ...n, r: n.r * t };
+          return { ...n, x: f.x + (n.x - f.x) * t, y: f.y + (n.y - f.y) * t, r: f.r + (n.r - f.r) * t };
+        }),
+      });
+      if (t < 1) raf = requestAnimationFrame(step);
+      else save();
+    };
+    raf = requestAnimationFrame(step);
+    return () => { cancelAnimationFrame(raf); save(); };
+  }, [target, ms]);
+  return shown;
+}
+
 export function MapCanvas({
-  data, pick, onPick, layers, interactive = true, fitSignal = 0,
+  data: target, pick, onPick, layers, interactive = true, fitSignal = 0,
 }: {
   data: MapResult;
   pick: Pick;
@@ -43,6 +78,7 @@ export function MapCanvas({
   interactive?: boolean;
   fitSignal?: number;
 }) {
+  const data = useTween(target);
   const svg = useRef<SVGSVGElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<View>({ k: 1, x: 0, y: 0 });
@@ -81,7 +117,8 @@ export function MapCanvas({
     return s;
   }, [pick, byId, edgesOf, data]);
 
-  useEffect(() => setView({ k: 1, x: 0, y: 0 }), [fitSignal, data]);
+  // a partial map turning into the full one keeps your zoom; a new token or Fit resets it
+  useEffect(() => setView({ k: 1, x: 0, y: 0 }), [fitSignal, target.token.mint]);
 
   const toSvg = useCallback((cx: number, cy: number) => {
     const el = svg.current!;

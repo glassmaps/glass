@@ -26,6 +26,7 @@ function useScan(mint: string, initial: MapResult | null) {
   const [err, setErr] = useState<Err | null>(null);
   const [run, setRun] = useState(initial ? 0 : 1);
   const [fresh, setFresh] = useState(false);
+  const [live, setLive] = useState(false);
 
   useEffect(() => {
     if (!run) return;
@@ -52,7 +53,8 @@ function useScan(mint: string, initial: MapResult | null) {
             const line = buf.slice(0, i);
             buf = buf.slice(i + 1);
             const l = readLine(line);
-            if (l.kind === "result") setData(l.map);
+            if (l.kind === "result") { setData(l.map); setLive(false); }
+            else if (l.kind === "partial") { setData(l.map); setLive(true); }
             else if (l.kind === "error") setErr(l.error);
             else if (l.kind === "stage") setStage(l.stage);
           }
@@ -61,13 +63,14 @@ function useScan(mint: string, initial: MapResult | null) {
         if ((e as Error).name !== "AbortError") setErr({ code: "network", message: "The connection dropped during the scan. Your network, or ours." });
       } finally {
         setStage(null);
+        setLive(false);
       }
     })();
     return () => ctl.abort();
   }, [mint, run, fresh]);
 
   return {
-    data, stage, err,
+    data, stage, err, live,
     retry: () => setRun((r) => r + 1),
     rescan: () => {
       setFresh(true);
@@ -81,9 +84,7 @@ function useScan(mint: string, initial: MapResult | null) {
 const STEPS: { key: Stage["stage"]; label: string }[] = [
   { key: "token", label: "Token" },
   { key: "holders", label: "Holders" },
-  { key: "funding", label: "Funding sources" },
-  { key: "first", label: "First buys" },
-  { key: "links", label: "Transfers between holders" },
+  { key: "links", label: "Wallet histories" },
   { key: "layout", label: "Links and layout" },
 ];
 
@@ -99,7 +100,7 @@ function Scanning({ stage }: { stage: Stage }) {
     <div className="state">
       <div className="state-box" aria-live="polite">
         <h2 className="h2">Reading the chain</h2>
-        <p>Every wallet&apos;s first funding and first buy is read from the chain. A fresh token takes a few seconds; one seen before is instant.</p>
+        <p>The map opens as soon as the holders are read. Links then land live, biggest holders first.</p>
         <ol className="steps">
           {STEPS.map((s, i) => {
             const cls = i < at ? "done" : i === at ? "on" : "";
@@ -117,6 +118,27 @@ function Scanning({ stage }: { stage: Stage }) {
         </ol>
         <p className="micro elapsed num">{((Date.now() - t0.current) / 1000).toFixed(1)}s</p>
       </div>
+    </div>
+  );
+}
+
+/** Sits on the map while links land: what is being read, how far along, how long it has taken. */
+function LivePill({ stage, live }: { stage: Stage; live: boolean }) {
+  const t0 = useRef(Date.now());
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => tick((n) => n + 1), 100);
+    return () => clearInterval(id);
+  }, []);
+  const label = STEPS.find((s) => s.key === stage.stage)?.label || "Reading";
+  const pct = "done" in stage && stage.total ? Math.round((stage.done / stage.total) * 100) : null;
+  return (
+    <div className="live" role="status" aria-live="polite">
+      <span className="live-dot" aria-hidden />
+      <span>{live ? (stage.stage === "links" ? "Reading links" : label) : "Refreshing"}</span>
+      {pct !== null && <span className="num live-n">{pct}%</span>}
+      <span className="num live-t">{((Date.now() - t0.current) / 1000).toFixed(1)}s</span>
+      {pct !== null && <i className="live-bar" style={{ transform: `scaleX(${pct / 100})` }} aria-hidden />}
     </div>
   );
 }
@@ -149,18 +171,22 @@ function Failed({ err, retry }: { err: Err; retry: () => void }) {
 
 // ------------------------------------------------------------------ panel parts
 
-function ScoreTab({ d }: { d: MapResult }) {
+function ScoreTab({ d, live = false }: { d: MapResult; live?: boolean }) {
   return (
     <>
       <div className="score-head">
         <div className="score-big num">{d.score.total}<small>/100</small></div>
-        {d.complete === false ? (
+        {live ? (
+          <span className="band band-live">Reading</span>
+        ) : d.complete === false ? (
           <span className="band band-concentrated">Incomplete</span>
         ) : (
           <span className={`band band-${d.score.band}`}>{BAND_LABEL[d.score.band]}</span>
         )}
         <p className="score-note">
-          {d.complete === false
+          {live
+            ? "Links are still landing. The score moves as each one is read."
+            : d.complete === false
             ? "Not enough of the chain was read to draw links, so this score only counts what was read. See the note above."
             : "A number, not a verdict. Every point comes from a line below."}
         </p>
@@ -376,7 +402,7 @@ function Inspector({ d, pick, onClose }: { d: MapResult; pick: Pick; onClose: ()
 // ------------------------------------------------------------------ screen
 
 export function MapScreen({ mint, initial }: { mint: string; initial: MapResult | null }) {
-  const { data, stage, err, retry, rescan } = useScan(mint, initial);
+  const { data, stage, err, live, retry, rescan } = useScan(mint, initial);
   const [pick, setPick] = useState<Pick>(null);
   const [tab, setTab] = useState<"clusters" | "holders" | "score">("score");
   const [layers, setLayers] = useState<Layers>({ links: true, cohorts: true, labels: true });
@@ -401,7 +427,8 @@ export function MapScreen({ mint, initial }: { mint: string; initial: MapResult 
 
   const linked = useMemo(() => (data ? data.clusters.reduce((s, c) => s + c.pct, 0) : 0), [data]);
   const scanning = Boolean(stage);
-  const showState = scanning || (!data && err);
+  // the map is on screen as soon as holders are known; only the very first second shows the step list
+  const showState = (scanning && !data) || (!data && err);
 
   const zoom = (f: number) => {
     const svg = stageRef.current?.querySelector("svg");
@@ -421,7 +448,7 @@ export function MapScreen({ mint, initial }: { mint: string; initial: MapResult 
         </div>
         <VenueLinks mint={mint} pair={t?.pairAddress} />
         <div className="tok-stats">
-          <div className="stat"><span className="micro">Score</span><span className="v num">{data ? <><i className={`sdot band-${data.complete === false ? "concentrated" : data.score.band}`} />{data.score.total}</> : "—"}</span></div>
+          <div className="stat"><span className="micro">Score</span><span className="v num">{data ? <>{scanning ? <i className="sdot sdot-live" /> : <i className={`sdot band-${data.complete === false ? "concentrated" : data.score.band}`} />}{data.score.total}</> : "—"}</span></div>
           <div className="stat"><span className="micro">Linked</span><span className="v num">{data ? fmtPct(linked) : "—"}</span></div>
           <div className="stat"><span className="micro">Holders</span><span className="v num">{data ? `${data.partial ? "≥" : ""}${fmtInt(data.holdersTotal)}` : "—"}</span></div>
           <div className="stat"><span className="micro">Mcap</span><span className="v num">{fmtUsd(t?.mcapUsd)}</span></div>
@@ -443,7 +470,7 @@ export function MapScreen({ mint, initial }: { mint: string; initial: MapResult 
 
       <div className="body">
         <div className="stage" ref={stageRef}>
-          {data && !scanning && (
+          {data && !showState && (
             <>
               <MapCanvas data={data} pick={pick} onPick={setPick} layers={layers} fitSignal={fit} />
               <div className="tools">
@@ -466,7 +493,8 @@ export function MapScreen({ mint, initial }: { mint: string; initial: MapResult 
               </div>
             </>
           )}
-          {scanning && stage && <Scanning stage={stage} />}
+          {scanning && data && stage && <LivePill stage={stage} live={live} />}
+          {scanning && !data && stage && <Scanning stage={stage} />}
           {!scanning && err && !data && <Failed err={err} retry={retry} />}
           {!scanning && !data && !err && <Scanning stage={{ stage: "token" }} />}
         </div>
@@ -485,7 +513,7 @@ export function MapScreen({ mint, initial }: { mint: string; initial: MapResult 
               </div>
               {data.notes.length > 0 && <ul className="notes">{data.notes.map((n) => <li key={n}>{n}</li>)}</ul>}
               <div className="pane" role="tabpanel">
-                {tab === "score" && <ScoreTab d={data} />}
+                {tab === "score" && <ScoreTab d={data} live={scanning} />}
                 {tab === "clusters" && <ClustersTab d={data} pick={pick} setPick={setPick} />}
                 {tab === "holders" && <HoldersTab d={data} pick={pick} setPick={setPick} />}
               </div>

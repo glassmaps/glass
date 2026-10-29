@@ -35,21 +35,20 @@ const W = limits.holders;
 
 // Helius credits for one fresh scan of the top holders: what every step costs, in the same units the bill uses
 const COST = [
-  { k: "Funding sources", v: W * 100, note: `${W} × funded-by at 100 credits`, c: "var(--c2)" },
-  { k: "First buys", v: W * 10, note: `${W} token accounts × getTransactionsForAddress at 10`, c: "var(--c1)" },
-  { k: "Reloads", v: W * 10, note: `${W} × the last SOL in before the buy at 10`, c: "var(--c5)" },
-  { k: "Transfers", v: W * 100, note: `${W} × last 100 transfers at 100`, c: "var(--c6)" },
-  { k: "Names", v: Math.ceil(W / 100) * 100, note: "1 × batch-identity per 100 wallets", c: "var(--c3)" },
+  { k: "Wallet histories", v: W * 10, note: `${W} × the last 60 transactions at 10 credits`, c: "var(--c6)" },
+  { k: "Older wallets", v: W * 10, note: "first SOL and first buy, only for wallets with longer histories", c: "var(--c2)" },
+  { k: "Launch block", v: 10, note: "1 × the token's own first slots at 10", c: "var(--c5)" },
+  { k: "Names", v: Math.ceil(W / 100) * 100 * 2, note: "batch-identity for holders and their funders", c: "var(--c3)" },
   { k: "Token and holders", v: 10 * (2 + limits.holderPages), note: `getAsset, deployer and up to ${limits.holderPages} holder pages at 10`, c: "var(--c4)" },
 ];
 const COST_TOTAL = COST.reduce((s, c) => s + c.v, 0);
 
 const STEPS = [
   { n: "01", t: "Token", call: "getAsset", d: "Name, symbol, decimals, supply." },
-  { n: "02", t: "Holders", call: "getTokenAccounts", d: `Every token account, summed per owner. Up to ${(limits.holderPages * 1000).toLocaleString("en-US")} accounts; the top ${W} are mapped.` },
-  { n: "03", t: "Funding", call: "funded-by", d: "The first SOL each wallet ever received. Cached forever: it cannot change." },
-  { n: "04", t: "First buy", call: "token account history", d: "The oldest transactions of each holder's own token account: slot, payer, tip, size, source. Then the SOL that paid for it." },
-  { n: "05", t: "Transfers", call: "wallet transfers + mint history", d: "Every holder's last 100 transfers, and everyone who got the token in its first slots. Then the rules in src/lib/graph.ts." },
+  { n: "02", t: "Holders", call: "getTokenAccounts", d: `Every token account, summed per owner. Up to ${(limits.holderPages * 1000).toLocaleString("en-US")} accounts; the top ${W} are mapped. The bubbles are on screen now.` },
+  { n: "03", t: "Wallet history", call: "getTransactionsForAddress", d: "Each holder's last 60 transactions, biggest holders first, all at once. For a young wallet that is its whole life: first SOL, first buy, the reload and every transfer in one read." },
+  { n: "04", t: "Older wallets", call: "first SOL + token account", d: "When the history is longer, its first SOL and the oldest transactions of its token account are read too. Both are cached forever: they cannot change." },
+  { n: "05", t: "Links", call: "mint history + src/lib/graph.ts", d: "Everyone who got the token in its first slots, then the rules. Links land on the map live as each wallet is read." },
 ];
 
 export default function Method() {
@@ -123,7 +122,7 @@ export default function Method() {
               <p>A line between two bubbles has one of eight causes, and each carries the transaction signature that proves it. Linked wallets form a cluster. A cluster that contains the deployer, or a wallet the deployer funded, is marked as the deployer&apos;s.</p>
               <div className="m-rules" data-reveal>
                 {[
-                  { n: "Moved between holders", art: <Funded label="2.5 SOL · Oct 12" />, t: "Any transfer between two top holders, of any token or SOL, at any time, from each holder's last 100 transfers. This is the link every bubble map is built on." },
+                  { n: "Moved between holders", art: <Funded label="2.5 SOL · Oct 12" />, t: "Any transfer between two top holders, of any token or SOL, at any time, from each holder's last 60 transactions. This is the link every bubble map is built on." },
                   { n: "Middleman", art: <SameFunder />, t: "An unnamed outside wallet that sent SOL (0.05+) or this token to 2+ holders, or collected this token from them. Exchanges, named services and wallets touching 40%+ of holders are excluded: those serve everyone." },
                   { n: "Funded", art: <Funded />, t: "A top holder, or the deployer, sent another top holder its first SOL." },
                   { n: "Same funder", art: <SameFunder />, t: `${rules.sharedFunderMin}+ top holders got their first SOL from one wallet with no known name or type. Exchanges, bridges and protocols are excluded: they fund unrelated people all day.` },

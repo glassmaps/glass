@@ -190,7 +190,16 @@ export function buildEdges(
       add(v.id, hid, "moved", [{ signature: t.signature, what, time: t.timestamp }]);
     }
   }
-  return { edges, virtual: [...virtual.values()] };
+  // one transaction draws one line: a funding that is also the reload and also a "moved" is shown once, by its strongest rule
+  const seen = new Set<string>();
+  const kept: Edge[] = [];
+  for (const e of edges) {
+    const pair = e.a < e.b ? `${e.a}|${e.b}` : `${e.b}|${e.a}`;
+    const receipts = e.receipts.filter((r) => !r.signature || !seen.has(`${pair}|${r.signature}`));
+    for (const r of receipts) if (r.signature) seen.add(`${pair}|${r.signature}`);
+    if (receipts.length) kept.push(receipts.length === e.receipts.length ? e : { ...e, receipts });
+  }
+  return { edges: kept, virtual: [...virtual.values()] };
 }
 
 export function buildClusters(holders: Node[], virtual: Node[], edges: Edge[]): Cluster[] {
