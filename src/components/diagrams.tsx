@@ -72,3 +72,39 @@ export function Together() {
     </svg>
   );
 }
+
+export function PaidBy() {
+  const kids: [number, number, number][] = [[64, 104, 18], [140, 116, 15], [216, 102, 17]];
+  return (
+    <svg className="dg" viewBox="0 0 280 150" aria-hidden>
+      {kids.map(([x, y], i) => (
+        <line key={i} className="dg-draw" style={{ animationDelay: `${0.15 + i * 0.2}s` }} x1="140" y1="36" x2={x} y2={y} pathLength={100} stroke={C.a} strokeWidth="1.2" strokeDasharray="0" />
+      ))}
+      {kids.map(([x, y, r], i) => (
+        <circle key={i} className="dg-fill" style={{ ["--from" as string]: C.dim, animationDelay: `${0.45 + i * 0.2}s` }} cx={x} cy={y} r={r} fill={C.a} stroke={C.bg} strokeWidth="3" />
+      ))}
+      <circle cx="140" cy="36" r="7" fill={C.bg} stroke={C.a} strokeWidth="1.5" />
+      <text x="156" y="32" fontSize="9.5" fill={C.ink} style={mono}>fee payer</text>
+      <text x="156" y="44" fontSize="9" fill="rgba(255,255,255,.36)" style={mono}>signs 3 buys</text>
+    </svg>
+  );
+}
+
+export function Reload() {
+  const kids: [number, string, string][] = [[70, "2.01", "14:02"], [140, "1.98", "14:05"], [210, "2.03", "14:09"]];
+  return (
+    <svg className="dg" viewBox="0 0 280 150" aria-hidden>
+      <rect x="96" y="18" width="88" height="22" rx="5" fill={C.bg} stroke="rgba(255,255,255,.28)" />
+      <text x="140" y="33" textAnchor="middle" fontSize="9.5" fill={C.ink} style={mono}>exchange</text>
+      {kids.map(([x], i) => (
+        <line key={i} className="dg-draw" style={{ animationDelay: `${0.15 + i * 0.25}s` }} x1="140" y1="40" x2={x} y2="96" pathLength={100} stroke={C.b} strokeWidth="1.4" strokeLinecap="round" strokeDasharray="1.5 3.5" />
+      ))}
+      {kids.map(([x, amt, t], i) => (
+        <g key={i}>
+          <circle className="dg-fill" style={{ ["--from" as string]: C.dim, animationDelay: `${0.5 + i * 0.25}s` }} cx={x} cy="108" r="15" fill={C.b} stroke={C.bg} strokeWidth="3" />
+          <text className="dg-late" x={x} y="142" textAnchor="middle" fontSize="9" fill="rgba(255,255,255,.5)" style={mono}>{amt} · {t}</text>
+        </g>
+      ))}
+    </svg>
+  );
+}

@@ -12,6 +12,14 @@ export const clusterColor = (c: number | null) => (c ? `var(--c${((c - 1) % 8) +
 
 const NEUTRAL = "rgba(255,255,255,0.15)";
 
+/** '"wenmoonsol" on Pump.fun' → 'wenmoonsol', 'Kadenox @kadenox' → 'Kadenox'. The full label stays in the inspector. */
+export function shortLabel(l: string | null) {
+  if (!l) return "";
+  let s = l.replace(/^"(.+?)"\s+on\s+.+$/i, "$1").replace(/\s+@\S+$/, "").trim();
+  if (s === "Program account") s = "Program";
+  return s;
+}
+
 function fill(n: Node) {
   if (n.kind === "program" || n.kind === "burn") return "none";
   if (n.kind === "funder") return "var(--bg)";
@@ -147,7 +155,9 @@ export function MapCanvas({
   };
 
   const nodes = data.nodes;
-  const cohortMembers = layers.cohorts ? nodes.filter((n) => n.cohort) : [];
+  // low-confidence cohorts are timing alone: listed in the panel, never drawn, so the map stays quiet
+  const loud = new Set(data.cohorts.filter((c) => c.confidence !== "low").map((c) => c.id));
+  const cohortMembers = layers.cohorts ? nodes.filter((n) => n.cohort && loud.has(n.cohort)) : [];
   const fs = (n: Node) => Math.max(8, Math.min(20, n.r * 0.42));
 
   return (
@@ -184,7 +194,8 @@ export function MapCanvas({
                       stroke={col}
                       strokeOpacity={sel ? 1 : 0.55}
                       strokeWidth={(sel ? 2.4 : e.type === "shared-funder" ? 1 : 1.5) / view.k}
-                      strokeDasharray={e.type === "transfer" ? `${5 / view.k} ${4 / view.k}` : undefined}
+                      strokeDasharray={e.type === "transfer" ? `${5 / view.k} ${4 / view.k}` : e.type === "batch" ? `${1.5 / view.k} ${3 / view.k}` : undefined}
+                      strokeLinecap={e.type === "batch" ? "round" : undefined}
                     />
                     {interactive && (
                       <line
@@ -241,31 +252,37 @@ export function MapCanvas({
                   strokeDasharray={ring ? `${4 / view.k} ${3 / view.k}` : undefined}
                 />
                 {sel && <circle cx={n.x} cy={n.y} r={n.r + 4 / view.k} fill="none" stroke="var(--ink)" strokeWidth={1.5 / view.k} />}
-                {n.rank > 0 && n.r * view.k >= 15 && (
-                  <text
-                    x={n.x} y={n.y} dy="0.35em" textAnchor="middle"
-                    fontSize={fs(n)}
-                    fill={ring ? "var(--ink-3)" : "rgba(0,0,0,0.72)"}
-                    style={{ fontFamily: "var(--font-mono)", fontStretch: "87.5%", pointerEvents: "none" }}
-                  >
-                    {n.rank}
-                  </text>
-                )}
-                {layers.labels && n.label && n.r * view.k >= 7 && !(n.labelSource === "rule" && n.kind !== "holder" && n.r * view.k <= 44) && (
-                  <text
-                    x={n.x}
-                    // big bubbles carry their label inside, under the rank; small ones underneath
-                    y={n.r * view.k > 44 ? n.y + fs(n) * 1.2 : n.y + n.r + 13 / view.k}
-                    textAnchor="middle"
-                    fontSize={11 / view.k}
-                    fill="var(--ink-2)"
-                    stroke="var(--bg)"
-                    strokeWidth={3 / view.k}
-                    paintOrder="stroke"
-                    style={{ fontFamily: "var(--font-mono)", fontStretch: "87.5%", pointerEvents: "none" }}
-                  >
-                    {n.label}
-                  </text>
+                {(() => {
+                  // one quiet stack inside the bubble: rank, then the name when it fits. Nothing hangs outside.
+                  const px = n.r * view.k;
+                  if (n.kind === "funder") return null;
+                  const name = layers.labels ? shortLabel(n.label) : "";
+                  const showName = name && px >= 30;
+                  const showRank = n.rank > 0 && px >= 13;
+                  if (!showName && !showRank) return null;
+                  const max = Math.max(4, Math.floor((n.r * 1.7) / (5.6 / view.k)));
+                  const nm = name.length > max ? name.slice(0, max - 1) + "…" : name;
+                  const rs = Math.max(8, Math.min(18, n.r * 0.4));
+                  const ink = ring ? "var(--ink-3)" : "rgba(0,0,0,0.72)";
+                  const mono = { fontFamily: "var(--font-mono)", fontStretch: "87.5%", pointerEvents: "none" } as const;
+                  return (
+                    <>
+                      {showRank && (
+                        <text x={n.x} y={showName ? n.y - rs * 0.25 : n.y} dy="0.35em" textAnchor="middle" fontSize={rs} fill={ink} style={mono}>
+                          {n.rank}
+                        </text>
+                      )}
+                      {showName && (
+                        <text x={n.x} y={n.y + rs * 0.85} dy="0.35em" textAnchor="middle" fontSize={9.5 / view.k} fill={ring ? "var(--ink-3)" : "rgba(0,0,0,0.6)"} style={mono}>
+                          {nm}
+                        </text>
+                      )}
+                    </>
+                  );
+                })()}
+                {/* a labelled wallet too small to carry its name gets a small tag: the name is one hover away */}
+                {layers.labels && n.label && n.kind !== "funder" && n.kind !== "program" && n.r * view.k < 30 && (
+                  <circle cx={n.x + n.r * 0.72} cy={n.y - n.r * 0.72} r={2.6 / view.k} fill="var(--ink)" stroke="var(--bg)" strokeWidth={1.2 / view.k} pointerEvents="none" />
                 )}
               </g>
             );

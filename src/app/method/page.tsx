@@ -4,7 +4,7 @@ import { Reveal } from "@/components/reveal";
 import { DocNav } from "@/components/doc-nav";
 import { CohortReplay } from "@/components/cohort-replay";
 import { ScoreSim } from "@/components/score-sim";
-import { Funded, SameFunder, Together, Transfer } from "@/components/diagrams";
+import { Funded, PaidBy, Reload, SameFunder, Together, Transfer } from "@/components/diagrams";
 import { BANDS, limits, METHOD_VERSION, rules, SCORE_RULES, site } from "@/config/site";
 
 export const metadata: Metadata = {
@@ -36,7 +36,8 @@ const W = limits.holders;
 // Helius credits for one fresh scan of the top holders: what every step costs, in the same units the bill uses
 const COST = [
   { k: "Funding sources", v: W * 100, note: `${W} × funded-by at 100 credits`, c: "var(--c2)" },
-  { k: "First buys", v: W * 10, note: `${W} × getTransactionsForAddress at 10`, c: "var(--c1)" },
+  { k: "First buys", v: W * 10, note: `${W} token accounts × getTransactionsForAddress at 10`, c: "var(--c1)" },
+  { k: "Reloads", v: W * 10, note: `${W} × the last SOL in before the buy at 10`, c: "var(--c5)" },
   { k: "Names", v: Math.ceil(W / 100) * 100, note: "1 × batch-identity per 100 wallets", c: "var(--c3)" },
   { k: "Token and holders", v: 10 * (2 + limits.holderPages), note: `getAsset, deployer and up to ${limits.holderPages} holder pages at 10`, c: "var(--c4)" },
 ];
@@ -46,7 +47,7 @@ const STEPS = [
   { n: "01", t: "Token", call: "getAsset", d: "Name, symbol, decimals, supply." },
   { n: "02", t: "Holders", call: "getTokenAccounts", d: `Every token account, summed per owner. Up to ${(limits.holderPages * 1000).toLocaleString("en-US")} accounts; the top ${W} are mapped.` },
   { n: "03", t: "Funding", call: "funded-by", d: "The first SOL each wallet ever received. Cached forever: it cannot change." },
-  { n: "04", t: "First buy", call: "getTransactionsForAddress", d: "The first transaction that brought this token in: slot, payer, tip, size, source." },
+  { n: "04", t: "First buy", call: "token account history", d: "The oldest transactions of each holder's own token account: slot, payer, tip, size, source. Then the SOL that paid for it." },
   { n: "05", t: "Rules", call: "src/lib/graph.ts", d: "Links, clusters, cohorts and the score. No model, no hand labels." },
 ];
 
@@ -65,8 +66,8 @@ export default function Method() {
               old maps are never mixed with new ones.
             </p>
             <dl className="m-facts">
-              <div><dt className="micro">Link rules</dt><dd className="num">3</dd></div>
-              <div><dt className="micro">Cohort signals</dt><dd className="num">4</dd></div>
+              <div><dt className="micro">Link rules</dt><dd className="num">6</dd></div>
+              <div><dt className="micro">Cohort signals</dt><dd className="num">6</dd></div>
               <div><dt className="micro">Score inputs</dt><dd className="num">{SCORE_RULES.length}</dd></div>
               <div><dt className="micro">Labels typed by hand</dt><dd className="num">0</dd></div>
             </dl>
@@ -118,12 +119,14 @@ export default function Method() {
             <section id="links" className="m-sec">
               <span className="idx micro">02</span>
               <h2>Links</h2>
-              <p>A line between two bubbles has exactly one of three causes, and each carries the transaction signature that proves it. Linked wallets form a cluster. A cluster that contains the deployer, or a wallet the deployer funded, is marked as the deployer&apos;s.</p>
+              <p>A line between two bubbles has one of six causes, and each carries the transaction signature that proves it. Linked wallets form a cluster. A cluster that contains the deployer, or a wallet the deployer funded, is marked as the deployer&apos;s.</p>
               <div className="m-rules" data-reveal>
                 {[
                   { n: "Funded", art: <Funded />, t: "A top holder, or the deployer, sent another top holder its first SOL." },
                   { n: "Same funder", art: <SameFunder />, t: `${rules.sharedFunderMin}+ top holders got their first SOL from one wallet with no known name or type. Exchanges, bridges and protocols are excluded: they fund unrelated people all day.` },
                   { n: "Token transfer", art: <Transfer />, t: "A holder's first tokens came out of another holder's wallet, not a pool, curve or other program, in the same transaction." },
+                  { n: "Fee paid by", art: <PaidBy />, t: "Another top holder, the deployer, or one unnamed wallet paying for 2+ holders signed and paid the fee of a holder's first buy. Named relayers are excluded." },
+                  { n: "Loaded before buying", art: <Reload />, t: `The last SOL a wallet received before its first buy, within ${rules.prefundWindowSec / 3600}h: from another holder, the deployer, or one unnamed wallet shared by 2+ holders. From an exchange it links only as a batch: ${rules.batchMin}+ withdrawals from the same hot wallet, at most ${rules.batchGapSec / 60} minutes apart, amounts within ${Math.round(rules.batchAmountSpread * 100)}%. This is how aged wallets with clean histories get caught.` },
                 ].map((r) => (
                   <div className="m-rule" key={r.n}>
                     <div className="card-art">{r.art}</div>
@@ -141,7 +144,8 @@ export default function Method() {
               <h2>Cohorts</h2>
               <p>
                 Bundlers spread SOL through fresh wallets so no transfer ever joins them. What they cannot hide is timing and habit. A cohort is{" "}
-                {rules.cohortMinSize} or more wallets whose first buys land within {rules.cohortSlotWindow + 1} slots of each other.
+                {rules.cohortMinSize} or more wallets whose first buys land within {rules.cohortSlotWindow + 1} slots of each other, or 2 or more that bought in the
+                block the token was created in: those buys were placed together with the launch.
               </p>
               <CohortReplay />
               <table className="doc-tbl">
@@ -151,6 +155,8 @@ export default function Method() {
                   <tr><td>Same size</td><td>SOL spent spreads less than {Math.round(rules.cohortSizeSpread * 100)}% of the median.</td></tr>
                   <tr><td>Same Jito tip</td><td>Half or more paid an identical tip to a Jito tip account.</td></tr>
                   <tr><td>Fresh wallets</td><td>Half or more were funded less than {hrs}h before their first buy.</td></tr>
+                  <tr><td>Reloaded</td><td>Half or more received SOL less than {hrs}h before their first buy, however old the wallet.</td></tr>
+                  <tr><td>Launch block</td><td>The buys landed within {rules.launchBlockSlots + 1} slots of the token&apos;s creation. Counts as two signals.</td></tr>
                 </tbody>
               </table>
               <div className="conf-grid">
@@ -232,7 +238,7 @@ export default function Method() {
               <ul className="limits">
                 <li>Only the top {W} holders are drawn and scored.</li>
                 <li>Funding is the first SOL a wallet received. A wallet funded through an exchange and then used by a bundler does not link by funding; it can still land in a cohort.</li>
-                <li>Two-hop funding (A funds B, B funds C) is not followed yet.</li>
+                <li>Two-hop funding (A funds B, B funds C) is not followed yet. Reloads through an exchange link only as a batch, so a bundler who withdraws at random times and amounts can still pass.</li>
                 <li>A cohort is evidence of coordinated timing, not proof of one owner. Bots chasing the same launch can look alike.</li>
                 <li>Finished maps are cached for {limits.scanTtl}s. Rescan reads everything again.</li>
               </ul>

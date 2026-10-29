@@ -3,7 +3,8 @@ import { site } from "@/config/site";
 import { short } from "@/lib/address";
 import { Mark, Wordmark } from "./brand";
 import { CopyButton } from "./copy";
-import { GitHub, Out, Tg, XLogo } from "./icons";
+import { GitHub, Tg, XLogo } from "./icons";
+import { VenueIcon } from "./venues";
 
 type At = "map" | "method" | "api" | "vs";
 
@@ -19,11 +20,13 @@ function Contract() {
       </span>
       {mint && <CopyButton value={mint} label={`Copy the $${site.ticker} contract address`} size={12} />}
       {mint ? (
-        <a className="ca-pump" href={`https://pump.fun/coin/${mint}`} target="_blank" rel="noreferrer">
-          pump.fun <Out size={11} />
+        <a className="ca-pump" href={`https://pump.fun/coin/${mint}`} target="_blank" rel="noreferrer" aria-label="Buy on pump.fun" title="Buy on pump.fun">
+          <VenueIcon v="pump" size={16} />
         </a>
       ) : (
-        <span className="ca-pump" aria-disabled>pump.fun</span>
+        <span className="ca-pump" aria-disabled title="pump.fun, at launch">
+          <VenueIcon v="pump" size={16} />
+        </span>
       )}
     </div>
   );

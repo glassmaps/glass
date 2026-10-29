@@ -10,7 +10,9 @@ export const linkable = (n: Node) => n.kind === "holder";
 /** A funder can link wallets only when nobody knows who it is. A named exchange funds strangers all day. */
 const anonymousFunder = (n: Node) => n.funding && !n.funding.funderName && !n.funding.funderType;
 
-export function buildEdges(holders: Node[], deployer: string | null, symbol = "") {
+const mins = (sec: number) => (sec < 3600 ? `${Math.max(1, Math.round(sec / 60))} min` : `${(sec / 3600).toFixed(1)}h`);
+
+export function buildEdges(holders: Node[], deployer: string | null, symbol = "", known: Set<string> = new Set()) {
   const byId = new Map(holders.map((h) => [h.id, h]));
   const edges: Edge[] = [];
   const virtual = new Map<string, Node>();
@@ -18,12 +20,13 @@ export function buildEdges(holders: Node[], deployer: string | null, symbol = ""
     const id = `${type}:${a}:${b}`;
     if (!edges.some((e) => e.id === id)) edges.push({ id, a, b, type, receipts });
   };
-  const funderNode = (addr: string): Node => {
-    const id = `f:${addr}`;
+  const funderNode = (addr: string, label: string | null = null, key = addr): Node => {
+    const id = `f:${key}`;
     let v = virtual.get(id);
     if (!v) {
+      const lab = addr === deployer ? "Deployer" : label;
       v = {
-        id, kind: "funder", label: addr === deployer ? "Deployer" : null, labelSource: addr === deployer ? "rule" : null,
+        id, kind: "funder", label: lab, labelSource: lab ? "rule" : null,
         amount: 0, pct: 0, rank: 0, cluster: null, cohort: null, fresh: false, isDeployer: addr === deployer,
         funding: null, first: null, x: 0, y: 0, r: 0,
       };
@@ -67,6 +70,74 @@ export function buildEdges(holders: Node[], deployer: string | null, symbol = ""
     const receipt = { signature: h.first!.signature, what: `${short(from)} sent ${symbol ? "$" + symbol : "tokens"} directly to ${short(h.id)} before it ever bought`, time: h.first!.blockTime };
     if (src && linkable(src)) add(src.id, h.id, "transfer", [receipt]);
     else if (from === deployer) add(funderNode(from).id, h.id, "transfer", [receipt]);
+  }
+  // 4. one wallet paid the fee for another's first buy: whoever pays the gas holds the keys or works for whoever does
+  const payers = new Map<string, Node[]>();
+  for (const h of holders) {
+    const b = h.first;
+    if (!linkable(h) || !b || b.feePayer === h.id || b.from === b.feePayer) continue;
+    const p = b.feePayer;
+    const receipt = { signature: b.signature, what: `${short(p)} paid the fee for ${short(h.id)}'s first buy`, time: b.blockTime };
+    const src = byId.get(p);
+    if (src && linkable(src)) add(src.id, h.id, "paid", [receipt]);
+    else if (p === deployer) add(funderNode(p).id, h.id, "paid", [receipt]);
+    else if (!known.has(p)) payers.set(p, [...(payers.get(p) || []), h]);
+  }
+  for (const [p, g] of payers) {
+    if (g.length < 2) continue;
+    const v = funderNode(p, "Fee payer");
+    for (const h of g) add(v.id, h.id, "paid", [{ signature: h.first!.signature, what: `${short(p)} paid the fee for ${short(h.id)}'s first buy, and for ${g.length - 1} other holder${g.length > 2 ? "s" : ""}`, time: h.first!.blockTime }]);
+  }
+
+  // 5. the SOL that paid for the buy came from another holder, the deployer, or one unnamed wallet shared by several
+  const reloads = new Map<string, Node[]>();
+  const fromExchange = new Map<string, Node[]>();
+  for (const h of holders) {
+    const pf = h.prefund, b = h.first;
+    if (!linkable(h) || !pf || !b) continue;
+    const gap = b.blockTime - pf.blockTime;
+    if (gap < 0 || gap > rules.prefundWindowSec) continue;
+    const what = `${pf.fromName || short(pf.from)} sent ${sol(pf.lamports / 1e9)} to ${short(h.id)} ${mins(gap)} before its first buy`;
+    const receipt = { signature: pf.signature, what, time: pf.blockTime };
+    const src = byId.get(pf.from);
+    if (src && linkable(src)) add(src.id, h.id, "prefunded", [receipt]);
+    else if (pf.from === deployer) add(funderNode(pf.from).id, h.id, "prefunded", [receipt]);
+    else if (pf.fromName) fromExchange.set(pf.from, [...(fromExchange.get(pf.from) || []), h]);
+    else reloads.set(pf.from, [...(reloads.get(pf.from) || []), h]);
+  }
+  for (const [from, g] of reloads) {
+    if (g.length < rules.sharedFunderMin) continue;
+    const v = funderNode(from);
+    for (const h of g) {
+      const pf = h.prefund!;
+      add(v.id, h.id, "prefunded", [{ signature: pf.signature, what: `${short(from)} sent ${sol(pf.lamports / 1e9)} to ${short(h.id)} ${mins(h.first!.blockTime - pf.blockTime)} before its first buy, and loaded ${g.length - 1} other holder${g.length > 2 ? "s" : ""} the same way`, time: pf.blockTime }]);
+    }
+  }
+
+  // 6. an exchange withdrawal batch: one exchange sends near-equal SOL to several future top holders within minutes.
+  //    Exchanges pay strangers all day, so it takes all three: same exchange, same minutes, same amount.
+  let batchN = 0;
+  for (const [from, g] of fromExchange) {
+    const sorted = [...g].sort((a, b) => a.prefund!.blockTime - b.prefund!.blockTime);
+    const runs: Node[][] = [];
+    for (const h of sorted) {
+      const run = runs[runs.length - 1];
+      if (run && h.prefund!.blockTime - run[run.length - 1].prefund!.blockTime <= rules.batchGapSec) run.push(h);
+      else runs.push([h]);
+    }
+    for (const run of runs) {
+      const amts = run.map((h) => h.prefund!.lamports).sort((a, b) => a - b);
+      const med = amts[Math.floor(amts.length / 2)];
+      const same = run.filter((h) => Math.abs(h.prefund!.lamports - med) <= med * rules.batchAmountSpread);
+      if (same.length < rules.batchMin) continue;
+      const name = same[0].prefund!.fromName || short(from);
+      const v = funderNode(from, `${name} batch`, `${from}:batch:${++batchN}`);
+      const t0 = same[0].prefund!.blockTime, t1 = same[same.length - 1].prefund!.blockTime;
+      for (const h of same) {
+        const pf = h.prefund!;
+        add(v.id, h.id, "batch", [{ signature: pf.signature, what: `${name} sent ${sol(pf.lamports / 1e9)} to ${short(h.id)}, one of ${same.length} near-equal withdrawals within ${mins(Math.max(60, t1 - t0))}, ${mins(h.first!.blockTime - pf.blockTime)} before its first buy`, time: pf.blockTime }]);
+      }
+    }
   }
   return { edges, virtual: [...virtual.values()] };
 }
@@ -127,7 +198,7 @@ export function markFresh(holders: Node[]) {
   }
 }
 
-export function buildCohorts(holders: Node[]): Cohort[] {
+export function buildCohorts(holders: Node[], createdSlot: number | null = null): Cohort[] {
   const buyers = holders.filter((h) => linkable(h) && h.first && h.first.slot).sort((a, b) => a.first!.slot - b.first!.slot);
   const groups: Node[][] = [];
   let cur: Node[] = [];
@@ -142,13 +213,24 @@ export function buildCohorts(holders: Node[]): Cohort[] {
 
   const out: Cohort[] = [];
   for (const g of groups) {
-    if (g.length < rules.cohortMinSize) continue;
+    // buys that land in the block the token was created in were placed together with the creation: a launch bundle
+    const atBirth = createdSlot !== null && g[0].first!.slot <= createdSlot + rules.launchBlockSlots;
+    if (g.length < (atBirth ? 2 : rules.cohortMinSize)) continue;
     const n = g.length;
     const signals: string[] = [];
     const s0 = g[0].first!.slot, s1 = g[n - 1].first!.slot;
     signals.push(s0 === s1 ? `${n} wallets made their first buy in the same slot (${s0.toLocaleString("en-US")})` : `${n} wallets made their first buy within ${s1 - s0 + 1} slots (from ${s0.toLocaleString("en-US")})`);
 
     let strong = 0;
+    if (atBirth) {
+      strong += 2;
+      signals.push(s0 === createdSlot ? "in the same block the token was created: bought together with the launch" : `within ${rules.launchBlockSlots + 1} slots of the token's creation`);
+    }
+    const reloaded = g.filter((h) => h.prefund && h.first!.blockTime - h.prefund.blockTime >= 0 && h.first!.blockTime - h.prefund.blockTime <= rules.freshWindowSec).length;
+    if (reloaded >= Math.ceil(n / 2)) {
+      strong++;
+      signals.push(`${reloaded} of ${n} were loaded with SOL less than ${rules.freshWindowSec / 3600}h before buying`);
+    }
     // one wallet paid the fees for several of the buys
     const payers = new Map<string, number>();
     for (const h of g) if (h.first!.feePayer !== h.id) payers.set(h.first!.feePayer, (payers.get(h.first!.feePayer) || 0) + 1);

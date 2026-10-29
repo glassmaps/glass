@@ -8,13 +8,17 @@ Glass shows data, never verdicts. It does not investigate people, it does not ta
 
 1. **Holders.** Every token account of the mint (`getTokenAccounts`), summed per owner. The top 100 are mapped. Owners that are program-derived addresses (bonding curves, pool vaults, lockers) are drawn as rings and never linked or scored.
 2. **Funding.** For each wallet, the first SOL it ever received (`/v1/wallet/{address}/funded-by`). Cached forever: it can't change.
-3. **First buy.** For each wallet, the first transaction in which it received the token (`getTransactionsForAddress`, oldest first, filtered by mint). From it: slot, fee payer, Jito tip, SOL spent, and whether the tokens came from a pool or from another wallet.
-4. **Links**, each with its transaction signature:
+3. **First buy.** For each wallet, the oldest transactions of its own token accounts (`getTransactionsForAddress`, falling back to `getSignaturesForAddress` + `getTransaction`). From the first receipt: slot, fee payer, Jito tip, SOL spent, and whether the tokens came from a pool or from another wallet.
+4. **Reload.** The last SOL the wallet received before that first buy. Aged wallets hide behind old funding; the reload is what paid for the buy.
+5. **Links**, each with its transaction signature:
    - **funded**: one top holder (or the deployer) sent another its first SOL
    - **same funder**: 2+ top holders share a funder with no known name or type (exchanges never link)
    - **token transfer**: a holder's first tokens came straight from another holder
-5. **Cohorts.** 3+ first buys within 2 slots, rated by shared fee payer, same size (within 12%), same Jito tip, and fresh wallets (funded under 6h before buying). This catches bundles that never transfer between their wallets.
-6. **Score.** 100 minus capped penalties for top-10 share, linked share, cohort share, deployer share and fresh wallets.
+   - **fee paid by**: another holder, the deployer, or one unnamed wallet paying for 2+ holders paid the fee of a first buy
+   - **loaded before buying**: the reload came from another holder, the deployer, or one unnamed wallet shared by 2+ holders (within 72h)
+   - **exchange batch**: 3+ reloads from the same exchange hot wallet, at most 10 minutes apart, amounts within 10%
+6. **Cohorts.** 3+ first buys within 2 slots, or 2+ in the token's creation block, rated by shared fee payer, same size (within 12%), same Jito tip, fresh wallets and reloads under 6h before buying. This catches bundles that never transfer between their wallets.
+7. **Score.** 100 minus capped penalties for top-10 share, linked share, cohort share, deployer share and fresh wallets.
 
 All thresholds live in [`src/config/site.ts`](src/config/site.ts). All rules live in [`src/lib/graph.ts`](src/lib/graph.ts) and are pinned by [`test/graph.test.ts`](test/graph.test.ts). The live site renders its [method page](src/app/method/page.tsx) from the same constants.
 

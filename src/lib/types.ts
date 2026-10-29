@@ -22,6 +22,16 @@ export interface FirstIn {
   from: string | null; // owner the tokens came from, when it is a wallet (a plain transfer)
 }
 
+export interface PreFund {
+  from: string; // who sent it
+  fromName: string | null; // known name of the sender (an exchange, a bridge), when there is one
+  fromType: string | null;
+  lamports: number;
+  signature: string;
+  slot: number;
+  blockTime: number;
+}
+
 export interface Node {
   id: string; // owner address, or "f:<address>" for a funder that holds none of the token
   kind: Kind;
@@ -36,12 +46,13 @@ export interface Node {
   isDeployer: boolean;
   funding: Funding | null;
   first: FirstIn | null;
+  prefund?: PreFund | null; // the last SOL in before the first buy
   x: number;
   y: number;
   r: number;
 }
 
-export type EdgeType = "funded" | "shared-funder" | "transfer";
+export type EdgeType = "funded" | "shared-funder" | "transfer" | "paid" | "prefunded" | "batch";
 
 export interface Receipt {
   signature: string;
@@ -93,6 +104,9 @@ export interface TokenInfo {
   mcapUsd: number | null;
   liquidityUsd: number | null;
   pairUrl: string | null;
+  pairAddress?: string | null;
+  volume24hUsd?: number | null;
+  createdSlot?: number | null;
 }
 
 export interface MapResult {

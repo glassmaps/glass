@@ -2,12 +2,12 @@ import { limits, METHOD_VERSION, site } from "@/config/site";
 import { BURN } from "@/config/known";
 import * as cache from "./cache";
 import { isAddress, isOnCurve } from "./address";
-import { deployerOf, firstIn, fundedBy, getAsset, getHolders, identities, UpstreamError } from "./helius";
+import { deployerOf, firstIn, fundedBy, getAsset, getHolders, identities, prefundOf, UpstreamError } from "./helius";
 import { market } from "./market";
 import { mapLimit } from "./pool";
 import { buildClusters, buildCohorts, buildEdges, markFresh, score } from "./graph";
 import { layout } from "./layout";
-import type { FirstIn, Funding, MapResult, Node, Stage } from "./types";
+import type { FirstIn, Funding, MapResult, Node, PreFund, Stage } from "./types";
 
 export class ScanError extends Error {
   constructor(public code: "bad-address" | "not-token" | "no-holders" | "config" | "upstream", message: string) {
@@ -49,11 +49,11 @@ export async function analyze(mint: string, onStage: (s: Stage) => void = () => 
   if (!asset) throw new ScanError("not-token", "No token lives at that address.");
 
   onStage({ stage: "holders" });
-  const [{ byOwner, partial }, deployer, mkt] = await Promise.all([
+  const [{ byOwner, accounts, partial }, birth, mkt] = await Promise.all([
     getHolders(mint, limits.holderPages, (count) => onStage({ stage: "holders", count })),
     (async () => {
-      const k = `dep:${mint}`;
-      const hit = await cache.get<{ d: string | null }>(k);
+      const k = `dep2:${mint}`;
+      const hit = await cache.get<{ d: Awaited<ReturnType<typeof deployerOf>> }>(k);
       if (hit) return hit.d;
       const d = await deployerOf(mint).catch(() => null);
       if (d) await cache.set(k, { d });
@@ -61,6 +61,7 @@ export async function analyze(mint: string, onStage: (s: Stage) => void = () => 
     })(),
     market(mint),
   ]);
+  const deployer = birth?.deployer ?? null;
   if (!byOwner.size) throw new ScanError("no-holders", "This token has no holders yet.");
 
   const scale = 10 ** asset.decimals;
@@ -119,50 +120,85 @@ export async function analyze(mint: string, onStage: (s: Stage) => void = () => 
   });
   if (fundingBlocked) notes.push("Funding sources were not read: the data key on this deployment is on a plan without the Wallet API.");
 
-  // the first time each wallet received the token
+  // the first time each wallet received the token, read from its own token accounts
   done = 0;
   const faKeys = people.map((n) => `fa:${mint}:${n.id}`);
   const faHits = await cache.getMany<{ t: FirstIn | null }>(faKeys);
   const retry: number[] = [];
   let limited = false;
+  let firstErr = "";
   const readFirst = async (i: number, tries: number) => {
     const n = people[i];
-    n.first = await firstIn(n.id, mint, tries);
+    const accts = (accounts.get(n.id) || []).map((a) => a.address);
+    n.first = await firstIn(n.id, mint, accts, tries);
     if (n.first) await cache.set(faKeys[i], { t: n.first });
   };
+  const note = (e: unknown) => {
+    if (e instanceof UpstreamError && e.status === 429) limited = true;
+    if (!firstErr) firstErr = (e instanceof Error ? e.message : String(e)).replace(/api-key=[^&\s]+/g, "api-key=…").replace(/\s+/g, " ").slice(0, 120);
+  };
   await mapLimit(people, limits.concurrency, async (n, i) => {
-    if (faHits[i]) n.first = faHits[i]!.t;
+    if (faHits[i]?.t) n.first = faHits[i]!.t;
     else {
       try {
         await readFirst(i, 3);
       } catch (e) {
-        if (e instanceof UpstreamError && e.status === 429) limited = true;
+        note(e);
         retry.push(i);
       }
     }
     if (!retry.includes(i)) onStage({ stage: "first", done: ++done, total: people.length });
   });
-  // a plan's rate limit is the usual reason a read fails: go again, slowly, while the request still has time
+  // go again, slowly, while the request still has time
   let firstMissing = 0;
   await mapLimit(retry, 2, async (i) => {
-    if (Date.now() - t0 > 38_000) { firstMissing++; return; }
+    if (Date.now() - t0 > 34_000) { firstMissing++; return; }
     try {
       await readFirst(i, 6);
-    } catch {
+    } catch (e) {
+      note(e);
       firstMissing++;
     }
     onStage({ stage: "first", done: ++done, total: people.length });
   });
-  if (firstMissing)
+  if (firstMissing) {
+    console.error("first-buy reads failed", mint, firstMissing, firstErr);
     notes.push(
-      `First buys could not be read for ${firstMissing} of ${people.length} wallets${limited ? ", because the data key on this deployment hit its plan's rate limit" : ""}; they are left out of cohorts. Rescan to try them again.`,
+      `First buys could not be read for ${firstMissing} of ${people.length} wallets${limited ? ", because the data key hit its plan's rate limit" : ""}; they are left out of cohorts. Provider said: ${firstErr || "no answer"}.`,
     );
+  }
+
+  // the reload right before each first buy: aged wallets hide behind old funding, not behind this
+  const buyers = people.filter((n) => n.first && n.first.slot);
+  const pfKeys = buyers.map((n) => `pf:${mint}:${n.id}`);
+  const pfHits = await cache.getMany<{ p: PreFund | null }>(pfKeys);
+  await mapLimit(buyers, limits.concurrency, async (n, i) => {
+    if (pfHits[i]) { n.prefund = pfHits[i]!.p; return; }
+    if (Date.now() - t0 > 44_000) return;
+    try {
+      n.prefund = await prefundOf(n.id, n.first!.slot, n.first!.signature);
+      await cache.set(pfKeys[i], { p: n.prefund });
+    } catch {
+      /* optional: the map stands without it */
+    }
+  });
+  // who sent those reloads, and who paid for the buys: an exchange is not a person, an unnamed wallet might be
+  const outside = [...new Set([
+    ...buyers.map((n) => n.prefund?.from),
+    ...buyers.map((n) => (n.first!.feePayer !== n.id ? n.first!.feePayer : null)),
+  ].filter((a): a is string => Boolean(a) && !byOwner.has(a!)))];
+  const named = outside.length ? await identities(outside) : new Map();
+  for (const n of buyers) {
+    const it = n.prefund && named.get(n.prefund.from);
+    if (n.prefund && it) { n.prefund.fromName = it.name || null; n.prefund.fromType = it.type || it.category || null; }
+  }
+  const knownPayers = new Set([...named.keys()]);
 
   onStage({ stage: "layout" });
   markFresh(nodes);
-  const { edges, virtual } = buildEdges(nodes, deployer, asset.symbol);
+  const { edges, virtual } = buildEdges(nodes, deployer, asset.symbol, knownPayers);
   const clusters = buildClusters(nodes, virtual, edges);
-  const cohorts = buildCohorts(nodes);
+  const cohorts = buildCohorts(nodes, birth?.slot ?? null);
   const sc = score(nodes, clusters, cohorts);
   const all = [...nodes, ...virtual];
   layout(all, edges);
@@ -172,6 +208,7 @@ export async function analyze(mint: string, onStage: (s: Stage) => void = () => 
     token: {
       mint, name: asset.name, symbol: asset.symbol, image: asset.image, decimals: asset.decimals, supply, deployer,
       priceUsd: mkt?.priceUsd ?? null, mcapUsd: mkt?.mcapUsd ?? null, liquidityUsd: mkt?.liquidityUsd ?? null, pairUrl: mkt?.pairUrl ?? null,
+      pairAddress: mkt?.pairAddress ?? null, volume24hUsd: mkt?.volume24hUsd ?? null, createdSlot: birth?.slot ?? null,
     },
     holdersTotal: byOwner.size, partial,
     nodes: all, edges, clusters, cohorts, score: sc,

@@ -5,7 +5,7 @@ import { Search } from "@/components/search";
 import { CopyButton } from "@/components/copy";
 import { Reveal } from "@/components/reveal";
 import { CohortReplay } from "@/components/cohort-replay";
-import { Funded, SameFunder, Together, Transfer } from "@/components/diagrams";
+import { Funded, PaidBy, Reload, SameFunder, Together, Transfer } from "@/components/diagrams";
 import { Check, Close, Out } from "@/components/icons";
 import { limits, METHOD_VERSION, rules, site } from "@/config/site";
 
@@ -16,7 +16,7 @@ const VS: { row: string; them: string; us: string }[] = [
   { row: "Source code", them: "Closed", us: "Open source, MIT. Fork it, audit it, run it yourself." },
   { row: "Cluster rules", them: "Not public", us: `Every threshold on the method page, versioned (now ${METHOD_VERSION}).` },
   { row: "Paywall", them: "P&L, AI cluster reads and 1,000-holder maps need $BMT held", us: "Nothing is gated. No wallet connect, no token, no account." },
-  { row: "Investigations", them: "Publishes threads on named traders", us: "Never names a person. Wallets and transactions only." },
+  { row: "Investigations", them: "Publishes threads on named traders", us: "Never investigates or accuses anyone. Known names come from public labels, with their source." },
   { row: "Project labels", them: "Projects can submit labels for their own wallets", us: "Every label says who set it. A label never removes a line." },
 ];
 
@@ -24,7 +24,9 @@ const RULES = [
   { n: "01", name: "Funded", art: <Funded />, text: "One top holder sent another its very first SOL. Same when the deployer did it.", rcpt: "the funding transfer" },
   { n: "02", name: "Same funder", art: <SameFunder />, text: `${rules.sharedFunderMin}+ holders got their first SOL from one wallet nobody can name. Exchanges and bridges fund strangers all day, so they never count.`, rcpt: "every funding transfer" },
   { n: "03", name: "Token transfer", art: <Transfer />, text: "A holder's first tokens came straight out of another holder's wallet, not a pool or the curve.", rcpt: "the transfer" },
-  { n: "04", name: "Bought together", art: <Together />, text: `${rules.cohortMinSize}+ first buys inside ${rules.cohortSlotWindow + 1} slots, rated by fee payer, size, Jito tip and wallets funded under ${hrs}h before.`, rcpt: "every first buy" },
+  { n: "04", name: "Fee paid by", art: <PaidBy />, text: "Another wallet signed and paid for a holder's first buy. Whoever pays the gas holds the keys, or works for whoever does.", rcpt: "the buy it paid for" },
+  { n: "05", name: "Loaded before buying", art: <Reload />, text: `The SOL that paid for the buy came from another holder, from one unnamed wallet, or from an exchange batch: ${rules.batchMin}+ near-equal withdrawals within ${rules.batchGapSec / 60} minutes. Aged wallets can't hide this one.`, rcpt: "the reload transfer" },
+  { n: "06", name: "Bought together", art: <Together />, text: `${rules.cohortMinSize}+ first buys inside ${rules.cohortSlotWindow + 1} slots, or 2+ in the block the token was created. Rated by fee payer, size, Jito tip and fresh SOL.`, rcpt: "every first buy" },
 ];
 
 export default function Home() {
@@ -170,8 +172,8 @@ export default function Home() {
             <div className="never">
               <div>
                 <span className="micro">i</span>
-                <h3>Name a person</h3>
-                <p>No callout threads, no investigations of people. The map shows wallets and transactions. What they mean is yours to judge.</p>
+                <h3>Accuse anyone</h3>
+                <p>No callout threads, no investigations. Known names come from a public label database and say so. What a wallet means is yours to judge.</p>
               </div>
               <div>
                 <span className="micro">ii</span>

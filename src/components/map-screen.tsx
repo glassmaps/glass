@@ -8,6 +8,8 @@ import { readLine } from "@/lib/stream";
 import { ago, fmtAmount, fmtInt, fmtPct, fmtSol, fmtUsd, utc } from "@/lib/format";
 import { clusterColor, MapCanvas, type Layers, type Pick } from "./map-canvas";
 import { CopyButton } from "./copy";
+import { TokenImg } from "./token-img";
+import { VenueLinks } from "./venues";
 import { Close, Fit, Minus, Out, Plus, Redo, Share } from "./icons";
 
 type Err = { code: string; message: string };
@@ -251,6 +253,7 @@ function HoldersTab({ d, pick, setPick }: { d: MapResult; pick: Pick; setPick: (
 
 const EDGE_TITLE: Record<Edge["type"], string> = {
   funded: "Funded", "shared-funder": "Same funder", transfer: "Token transfer",
+  paid: "Fee paid by", prefunded: "Loaded before buying", batch: "Exchange batch",
 };
 
 function Receipt({ e }: { e: Edge }) {
@@ -327,6 +330,17 @@ function Inspector({ d, pick, onClose }: { d: MapResult; pick: Pick; onClose: ()
                   {node.first.feePayer !== node.id && <><dt>Fee paid by</dt><dd>{short(node.first.feePayer, 4)}</dd></>}
                 </>
               )}
+              {node.prefund && node.first && (
+                <>
+                  <dt>Loaded before buying</dt>
+                  <dd className="num">
+                    <a href={explorer.tx(node.prefund.signature)} target="_blank" rel="noreferrer" tabIndex={open ? 0 : -1}>
+                      {fmtSol(node.prefund.lamports / 1e9)} from {node.prefund.fromName || short(node.prefund.from, 4)}
+                    </a>
+                    {" · "}{ago(node.prefund.blockTime * 1000, node.first.blockTime * 1000).replace(" ago", " before")}
+                  </dd>
+                </>
+              )}
               {node.fresh && <><dt>Fresh</dt><dd className="flag">funded under 6h before buying</dd></>}
             </dl>
             <h3 className="micro">{links.length ? `Receipts · ${links.length}` : "Receipts"}</h3>
@@ -388,16 +402,18 @@ export function MapScreen({ mint, initial }: { mint: string; initial: MapResult 
   return (
     <div className="scr">
       <div className="tok">
-        {t?.image ? <img className="tok-img" src={t.image} alt="" width={34} height={34} /> : <span className="tok-img" />}
+        <TokenImg className="tok-img" mint={mint} image={t?.image} symbol={t?.symbol} size={34} />
         <div className="tok-name">
           <h1>{t ? t.name : err ? "Unknown token" : "Mapping token"}{t?.symbol && <span>${t.symbol}</span>}</h1>
           <div className="addr">{short(mint, 6)}<CopyButton value={mint} label="Copy contract address" size={12} /></div>
         </div>
+        <VenueLinks mint={mint} pair={t?.pairAddress} />
         <div className="tok-stats">
-          <div className="stat"><span className="micro">Score</span><span className="v num">{data ? data.score.total : "—"}</span></div>
+          <div className="stat"><span className="micro">Score</span><span className="v num">{data ? <><i className={`sdot band-${data.complete === false ? "concentrated" : data.score.band}`} />{data.score.total}</> : "—"}</span></div>
           <div className="stat"><span className="micro">Linked</span><span className="v num">{data ? fmtPct(linked) : "—"}</span></div>
           <div className="stat"><span className="micro">Holders</span><span className="v num">{data ? `${data.partial ? "≥" : ""}${fmtInt(data.holdersTotal)}` : "—"}</span></div>
           <div className="stat"><span className="micro">Mcap</span><span className="v num">{fmtUsd(t?.mcapUsd)}</span></div>
+          <div className="stat"><span className="micro">Vol 24h</span><span className="v num">{fmtUsd(t?.volume24hUsd)}</span></div>
         </div>
         <div className="tok-actions">
           {data ? (
@@ -431,10 +447,10 @@ export function MapScreen({ mint, initial }: { mint: string; initial: MapResult 
                 </div>
               </div>
               <div className="legend" aria-hidden>
-                <span><i className="swatch" />funded</span>
-                <span><i className="swatch dash" />token transfer</span>
-                <span><i className="swatch ring" style={{ marginRight: 8 }} />bought together</span>
-                <span><i className="swatch ring" style={{ marginRight: 8, borderColor: "var(--ink-4)" }} />program / pool</span>
+                <span><i className="swatch" />linked, tap for proof</span>
+                {data.edges.some((e) => e.type === "transfer") && <span><i className="swatch dash" />tokens passed</span>}
+                {data.edges.some((e) => e.type === "batch") && <span><i className="swatch dot" />exchange batch</span>}
+                {data.cohorts.some((c) => c.confidence !== "low") && <span><i className="swatch ring" />bought together</span>}
               </div>
             </>
           )}

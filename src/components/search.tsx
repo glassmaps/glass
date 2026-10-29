@@ -2,6 +2,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { Search as SearchIcon } from "./icons";
+import { TokenImg } from "./token-img";
 
 const B58 = /[1-9A-HJ-NP-Za-km-z]{32,44}/;
 
@@ -87,7 +88,7 @@ export function Search({ autoFocus, id = "ca", recent: showRecent = true }: { au
         {recent && recent.length > 0 && <span className="micro">Mapped recently</span>}
         {recent?.slice(0, 6).map((r) => (
           <a key={r.mint} className="chip" href={`/t/${r.mint}`}>
-            {r.image ? <img src={r.image} alt="" width={18} height={18} loading="lazy" /> : <span className="tok-blank" />}
+            <TokenImg mint={r.mint} image={r.image} symbol={r.symbol} size={18} />
             <span>${r.symbol || r.mint.slice(0, 4)}</span>
             <span className="sc num">{r.score}</span>
           </a>

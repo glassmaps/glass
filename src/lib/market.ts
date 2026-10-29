@@ -5,6 +5,8 @@ interface Pair {
   fdv?: number;
   marketCap?: number;
   liquidity?: { usd?: number };
+  pairAddress?: string;
+  volume?: { h24?: number };
 }
 
 /** Price, market cap and liquidity from the deepest Solana pair. Optional: the map never waits on it for long. */
@@ -23,6 +25,9 @@ export async function market(mint: string) {
       mcapUsd: p.marketCap ?? p.fdv ?? null,
       liquidityUsd: p.liquidity?.usd ?? null,
       pairUrl: p.url ?? null,
+      pairAddress: p.pairAddress ?? null,
+      // all Solana pairs together: the token's real 24h volume, not just the deepest pool's
+      volume24hUsd: pairs.reduce((t, x) => t + (x.volume?.h24 || 0), 0) || null,
     };
   } catch {
     return null;

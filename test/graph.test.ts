@@ -149,3 +149,70 @@ test("stream: a progress count is never taken for the map", async () => {
   assert.equal(readLine('{"error":{"code":"rate","message":"slow"}}').kind, "error");
   assert.equal(readLine("  ").kind, "skip");
 });
+
+test("images: every way a token picture is written becomes URLs worth trying", async () => {
+  const { expand, safe } = await import("../src/lib/image");
+  const cid = "bafybeia4zlazqj7yvf3u2yvm3prs4di67m4hjtm4ytms4vgzseu6sldbma";
+  assert.ok(expand(`ipfs://${cid}`).length >= 4);
+  assert.ok(expand(`https://float.mypinata.cloud/ipfs/${cid}`)[0].startsWith("https://float.mypinata.cloud"));
+  assert.ok(expand(`https://float.mypinata.cloud/ipfs/${cid}`).some((u) => u.startsWith("https://ipfs.io/ipfs/")));
+  const wrapped = expand(`https://cdn.helius-rpc.com/cdn-cgi/image//https://float.mypinata.cloud/ipfs/${cid}`);
+  assert.ok(wrapped.some((u) => u.startsWith("https://dweb.link/ipfs/" + cid)));
+  assert.deepEqual(expand("ar://abc"), ["https://arweave.net/abc"]);
+  assert.equal(safe("http://example.com/a.png"), null);
+  assert.equal(safe("https://127.0.0.1/a.png"), null);
+  assert.equal(safe("https://localhost/a.png"), null);
+  assert.ok(safe("https://ipfs.io/ipfs/x"));
+});
+
+const pre = (from: string, t: number, sol = 2, name: string | null = null) => ({
+  from, fromName: name, fromType: name ? "Centralized Exchange" : null, lamports: sol * 1e9, signature: `sig-p-${from}-${t}-${sol}`, slot: 1, blockTime: t,
+});
+
+test("one unnamed wallet paying the fee for several first buys becomes a fee-payer hub; a named relayer does not", () => {
+  const P = "PAYERxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+  const R = "RELAYxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+  const hs = [
+    holder(1, 3, null, buy(10, { feePayer: P })), holder(2, 3, null, buy(11, { feePayer: P })),
+    holder(3, 3, null, buy(12, { feePayer: R })), holder(4, 3, null, buy(13, { feePayer: R })),
+  ];
+  const { edges, virtual } = buildEdges(hs, null, "", new Set([R]));
+  assert.equal(edges.filter((e) => e.type === "paid").length, 2);
+  assert.equal(virtual.length, 1);
+  assert.equal(virtual[0].label, "Fee payer");
+});
+
+test("aged wallets reloaded by one unnamed wallet right before buying are linked; a reload weeks old is not", () => {
+  const S = "SOURCExxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+  const t = 1_700_000_600;
+  const hs = [holder(1, 4, null, buy(10)), holder(2, 4, null, buy(11)), holder(3, 4, null, buy(12))];
+  hs[0].prefund = pre(S, t - 600);
+  hs[1].prefund = pre(S, t - 1200);
+  hs[2].prefund = pre(S, t - 40 * 86400);
+  const { edges } = buildEdges(hs, null);
+  const pf = edges.filter((e) => e.type === "prefunded");
+  assert.equal(pf.length, 2);
+  assert.match(pf[0].receipts[0].what, /min before its first buy/);
+});
+
+test("an exchange batch needs the same exchange, the same minutes and the same amount", () => {
+  const X = "BINANCExxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+  const t = 1_700_000_000;
+  const hs = [1, 2, 3, 4, 5].map((i) => holder(i, 2, null, buy(10 + i)));
+  hs[0].prefund = pre(X, t, 2.0, "Binance Hot Wallet 2");
+  hs[1].prefund = pre(X, t + 120, 2.05, "Binance Hot Wallet 2");
+  hs[2].prefund = pre(X, t + 300, 1.98, "Binance Hot Wallet 2");
+  hs[3].prefund = pre(X, t + 360, 9.0, "Binance Hot Wallet 2"); // different amount: out
+  hs[4].prefund = pre(X, t + 9000, 2.0, "Binance Hot Wallet 2"); // hours later: out
+  const { edges, virtual } = buildEdges(hs, null);
+  assert.equal(edges.filter((e) => e.type === "batch").length, 3);
+  assert.equal(virtual[0].label, "Binance Hot Wallet 2 batch");
+});
+
+test("two buys in the token's creation block are a high-confidence launch cohort", () => {
+  const hs = [holder(1, 6, null, buy(500)), holder(2, 5, null, buy(500)), holder(3, 1, null, buy(900))];
+  const cs = buildCohorts(hs, 500);
+  assert.equal(cs.length, 1);
+  assert.equal(cs[0].confidence, "high");
+  assert.ok(cs[0].signals.some((s) => /created/.test(s)));
+});

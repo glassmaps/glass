@@ -1,7 +1,7 @@
 // Everything a person might want to tune lives here. Thresholds are published on /method,
 // so a change here is a change to the public methodology: bump METHOD_VERSION with it.
 
-export const METHOD_VERSION = "1.0";
+export const METHOD_VERSION = "1.1";
 
 export const site = {
   name: "Glass",
@@ -36,6 +36,14 @@ export const rules = {
   cohortSizeSpread: 0.12,
   // "fresh": funded this long before the first buy, or less
   freshWindowSec: 6 * 60 * 60,
+  // the reload before a first buy counts for links only if it came this close to the buy
+  prefundWindowSec: 72 * 60 * 60,
+  // exchange batch: same exchange, withdrawals at most this far apart, amounts this close, at least this many
+  batchGapSec: 10 * 60,
+  batchAmountSpread: 0.1,
+  batchMin: 3,
+  // buys this many slots after the creation slot (or in it) count as part of the launch
+  launchBlockSlots: 1,
 };
 
 export const explorer = {
@@ -48,7 +56,7 @@ export const explorer = {
 // penalty = min(max, max(0, share - free) * weight). The caps add up to 100.
 export const SCORE_RULES = [
   { key: "top10", label: "Top 10 wallets", free: 20, weight: 0.5, max: 15 },
-  { key: "clusters", label: "Linked by funding or transfers", free: 0, weight: 1, max: 35 },
+  { key: "clusters", label: "Linked wallets", free: 0, weight: 1, max: 35 },
   { key: "cohorts", label: "Bought together", free: 0, weight: 1, max: 30 },
   { key: "dev", label: "Deployer and its links", free: 0, weight: 2, max: 15 },
   { key: "fresh", label: "Fresh wallets", free: 0, weight: 0.25, max: 5 },

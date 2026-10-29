@@ -1,7 +1,7 @@
 import { sleep } from "./pool";
 import { isOnCurve } from "./address";
 import { JITO_TIP, PROGRAMS } from "@/config/known";
-import type { FirstIn, Funding } from "./types";
+import type { FirstIn, Funding, PreFund } from "./types";
 
 const KEY = process.env.HELIUS_API_KEY || "";
 const RPC = process.env.HELIUS_RPC_URL || `https://mainnet.helius-rpc.com/?api-key=${KEY}`;
@@ -89,24 +89,30 @@ export async function getAsset(mint: string) {
 }
 
 interface TokenAccountsPage {
-  token_accounts: { owner: string; amount: number }[];
+  token_accounts: { address: string; owner: string; amount: number }[];
 }
 
 /** Every owner of the mint with a balance, summed across token accounts. Reads at most `pages` x 1000 accounts. */
 export async function getHolders(mint: string, pages: number, onPage?: (n: number) => void) {
   const byOwner = new Map<string, number>();
+  // every token account an owner holds this mint in, largest first: where its first receipt is recorded
+  const accounts = new Map<string, { address: string; amount: number }[]>();
   let partial = false;
   for (let page = 1; page <= pages; page++) {
     const r = await rpc<TokenAccountsPage>("getTokenAccounts", { mint, page, limit: 1000, options: { showZeroBalance: false } });
     for (const t of r.token_accounts) {
       if (!t.amount) continue;
       byOwner.set(t.owner, (byOwner.get(t.owner) || 0) + Number(t.amount));
+      const list = accounts.get(t.owner) || [];
+      list.push({ address: t.address, amount: Number(t.amount) });
+      accounts.set(t.owner, list);
     }
     onPage?.(byOwner.size);
     if (r.token_accounts.length < 1000) break;
     if (page === pages) partial = true;
   }
-  return { byOwner, partial };
+  for (const list of accounts.values()) list.sort((a, b) => b.amount - a.amount);
+  return { byOwner, accounts, partial };
 }
 
 // ------------------------------------------------------------------ wallets
@@ -202,31 +208,104 @@ interface GtfaPage {
   paginationToken: string | null;
 }
 
-const gtfa = (address: string, filters: Record<string, unknown>, limit = 1, tries = 4) =>
+const gtfa = (address: string, filters: Record<string, unknown>, limit = 1, tries = 4, sortOrder: "asc" | "desc" = "asc") =>
   rpc<GtfaPage>("getTransactionsForAddress", [
     address,
     {
       transactionDetails: "full",
       encoding: "jsonParsed",
       maxSupportedTransactionVersion: 0,
-      sortOrder: "asc",
+      sortOrder,
       limit,
       filters: { status: "succeeded", ...filters },
     },
   ], tries);
 
-/** The wallet that paid for the mint's first transaction. */
-export async function deployerOf(mint: string): Promise<string | null> {
+/** The wallet that paid for the mint's first transaction, and the slot the token was born in. */
+export async function deployerOf(mint: string): Promise<{ deployer: string | null; slot: number; time: number } | null> {
   const r = await gtfa(mint, {});
   const tx = r.data?.[0];
-  return tx?.transaction.message.accountKeys[0]?.pubkey ?? null;
+  if (!tx) return null;
+  return { deployer: tx.transaction.message.accountKeys[0]?.pubkey ?? null, slot: tx.slot, time: tx.blockTime || 0 };
 }
 
-/** The first transaction in which `owner` received `mint`, read into the facts we compare across holders. */
-export async function firstIn(owner: string, mint: string, tries = 4): Promise<FirstIn | null> {
-  const r = await gtfa(owner, { tokenAccounts: "balanceChanged", tokenTransfer: { mint, direction: "in" } }, 1, tries);
-  const tx = r.data?.[0];
-  return tx ? readFirstIn(tx, owner, mint) : null;
+/** Did `owner`'s balance of `mint` go up in this transaction? */
+function received(tx: FullTx, owner: string, mint: string) {
+  const sum = (list?: TokBal[]) => (list || []).filter((b) => b.mint === mint && b.owner === owner).reduce((t, b) => t + BigInt(b.uiTokenAmount.amount), 0n);
+  return Boolean(tx.meta && !tx.meta.err && sum(tx.meta.postTokenBalances) > sum(tx.meta.preTokenBalances));
+}
+
+async function getTx(signature: string): Promise<FullTx | null> {
+  const t = await rpc<FullTx | null>("getTransaction", [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0, commitment: "confirmed" }], 4);
+  return t;
+}
+
+/**
+ * The first transaction in which `owner` received `mint`.
+ * Read from the owner's own token accounts: a token account only ever sees this one mint, so its oldest
+ * transactions are the first receipt. First through Helius' history index, then through plain RPC
+ * signatures if the index refuses, so one provider quirk can't blank the whole column.
+ */
+export async function firstIn(owner: string, mint: string, accounts: string[], tries = 4): Promise<FirstIn | null> {
+  let best: FirstIn | null = null;
+  let lastErr: unknown = null;
+  for (const acct of accounts.slice(0, 3)) {
+    let txs: FullTx[] = [];
+    try {
+      txs = (await gtfa(acct, {}, 4, tries)).data || [];
+    } catch (e) {
+      lastErr = e;
+      try {
+        // plain RPC: newest first, so walk back to the oldest page (token accounts rarely have more than one)
+        let before: string | undefined;
+        let oldest: { signature: string }[] = [];
+        for (let page = 0; page < 4; page++) {
+          const sigs = await rpc<{ signature: string; err: unknown }[]>("getSignaturesForAddress", [acct, { limit: 1000, ...(before ? { before } : {}) }], tries);
+          if (!sigs.length) break;
+          oldest = sigs.filter((x) => !x.err);
+          before = sigs[sigs.length - 1].signature;
+          if (sigs.length < 1000) break;
+        }
+        for (const sig of oldest.slice(-4).reverse()) {
+          const t = await getTx(sig.signature);
+          if (t) txs.push(t);
+        }
+      } catch (e2) {
+        lastErr = e2;
+        continue;
+      }
+    }
+    const tx = txs.find((t) => received(t, owner, mint));
+    const read = tx ? readFirstIn(tx, owner, mint) : null;
+    if (read && (!best || read.slot < best.slot)) best = read;
+  }
+  if (!best && lastErr) throw lastErr;
+  return best;
+}
+
+/**
+ * The SOL a wallet received last before its first buy: the money that actually paid for it.
+ * Aged wallets defeat "first funding ever"; this catches the reload right before the launch.
+ */
+export async function prefundOf(owner: string, beforeSlot: number, skipSig: string, tries = 3): Promise<PreFund | null> {
+  const r = await gtfa(owner, { slot: { lte: beforeSlot } }, 12, tries, "desc");
+  for (const tx of r.data || []) {
+    if (tx.transaction.signatures[0] === skipSig || !tx.meta || tx.meta.err) continue;
+    const all: Parsed[] = [...tx.transaction.message.instructions, ...(tx.meta.innerInstructions || []).flatMap((x) => x.instructions)];
+    let best: { from: string; lamports: number } | null = null;
+    for (const ix of all) {
+      if (ix.program !== "system" || (ix.parsed?.type !== "transfer" && ix.parsed?.type !== "transferWithSeed")) continue;
+      const info = ix.parsed.info || {};
+      const lamports = Number(info.lamports) || 0;
+      if (String(info.destination) === owner && String(info.source) !== owner && lamports >= 5_000_000 && (!best || lamports > best.lamports)) {
+        best = { from: String(info.source), lamports };
+      }
+    }
+    if (best) {
+      return { from: best.from, fromName: null, fromType: null, lamports: best.lamports, signature: tx.transaction.signatures[0], slot: tx.slot, blockTime: tx.blockTime || 0 };
+    }
+  }
+  return null;
 }
 
 export function readFirstIn(tx: FullTx, owner: string, mint: string): FirstIn | null {
