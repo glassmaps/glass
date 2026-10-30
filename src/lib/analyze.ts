@@ -81,7 +81,7 @@ export async function analyze(
   const notes: string[] = [];
   if (partial) notes.push(`This token has more than ${(limits.holderPages * 1000).toLocaleString("en-US")} token accounts. The holder count is a lower bound; the top ${limits.holders} are still exact.`);
 
-  const self = Boolean(site.tokenMint) && mint === site.tokenMint;
+  const self = isOwn(mint, asset.symbol);
   const own = self ? selfLabels() : {};
 
   const nodes: Node[] = top.map(([owner, raw], i) => {
@@ -189,7 +189,7 @@ export async function analyze(
     const { edges, virtual } = buildEdges(ns, deployer, asset!.symbol, known, xf, mint);
     const clusters = buildClusters(ns, virtual, edges);
     const cohorts = buildCohorts(ns, birth?.slot ?? null);
-    const sc = score(ns, clusters, cohorts, launch?.pctHeld ?? 0);
+    const sc = score(ns, clusters, cohorts, launch?.pctHeld ?? 0, self);
     const all = [...ns, ...virtual];
     layout(all, edges);
     return {

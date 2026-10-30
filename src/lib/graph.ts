@@ -333,7 +333,7 @@ export function buildCohorts(holders: Node[], createdSlot: number | null = null)
 
 const round1 = (v: number) => Math.round(v * 10) / 10;
 
-export function score(holders: Node[], clusters: Cluster[], cohorts: Cohort[], launchHeld = 0) {
+export function score(holders: Node[], clusters: Cluster[], cohorts: Cohort[], launchHeld = 0, self = false) {
   const ranked = holders.filter((h) => h.kind === "holder" || h.kind === "exchange").sort((a, b) => b.pct - a.pct);
   const top10 = ranked.slice(0, 10).reduce((s, h) => s + h.pct, 0);
   const clustered = clusters.reduce((s, c) => s + c.pct, 0);
@@ -346,7 +346,8 @@ export function score(holders: Node[], clusters: Cluster[], cohorts: Cohort[], l
   const values: Record<string, number> = { top10, clusters: clustered, cohorts: cohort, dev, fresh, launch: launchHeld };
   const items: ScoreItem[] = SCORE_RULES.map((r) => {
     const value = round1(values[r.key]);
-    return { key: r.key, label: r.label, value, max: r.max, penalty: round1(Math.min(r.max, Math.max(0, value - r.free) * r.weight)) };
+    const penalty = round1(Math.min(r.max, Math.max(0, value - r.free) * r.weight));
+    return { key: r.key, label: r.label, value, max: r.max, penalty: self ? 0 : penalty };
   });
   const total = Math.max(0, Math.min(100, Math.round(100 - items.reduce((s, i) => s + i.penalty, 0))));
   const band = BANDS.find((b) => total >= b.min)!.band;
