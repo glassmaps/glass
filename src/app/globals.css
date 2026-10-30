@@ -2019,6 +2019,7 @@ a.ca-pump:hover {
 .insp {
   position: absolute;
   inset: 0;
+  z-index: 3; /* above the holders table's sticky header */
   display: flex;
   flex-direction: column;
   background: var(--raised);
