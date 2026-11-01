@@ -186,9 +186,11 @@ export async function analyze(
     }));
     const xf = final ? xfers : new Map([...xfers].map(([id, l]) => [id, l.filter((t) => ok(t.counterparty))]));
     markFresh(ns);
-    const { edges, virtual } = buildEdges(ns, deployer, asset!.symbol, known, xf, mint);
-    const clusters = buildClusters(ns, virtual, edges);
-    const cohorts = buildCohorts(ns, birth?.slot ?? null);
+    const built = buildEdges(ns, deployer, asset!.symbol, known, xf, mint);
+    const edges = self ? [] : built.edges;
+    const virtual = self ? [] : built.virtual;
+    const clusters = self ? [] : buildClusters(ns, virtual, edges);
+    const cohorts = self ? [] : buildCohorts(ns, birth?.slot ?? null);
     const sc = score(ns, clusters, cohorts, launch?.pctHeld ?? 0, self);
     const all = [...ns, ...virtual];
     layout(all, edges);
