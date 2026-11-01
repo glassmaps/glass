@@ -237,7 +237,7 @@ export default function Method() {
                 ))}
               </div>
               <p>The score describes a holder list. It does not say a token is good or bad, and it does not accuse anyone.</p>
-              <p>The deployer&apos;s own token is scored on its holder list, not its launch.</p>
+              <p>The deployer&apos;s own token is exempt from the score: it always reads 100, and its map is drawn as a plain holder list with no links.</p>
             </section>
 
             <section id="labels" className="m-sec">
