@@ -212,7 +212,7 @@ function ScoreTab({ d, live = false, setPick }: { d: MapResult; live?: boolean; 
 
 function ClustersTab({ d, pick, setPick }: { d: MapResult; pick: Pick; setPick: (p: Pick) => void }) {
   if (!d.clusters.length && !d.cohorts.length)
-    return <p className="pane-note" style={{ borderTop: 0 }}>No two of the top holders share a funder, fund each other or passed tokens between them, and no group bought together. That is as clean as a holder list gets.</p>;
+    return <p className="pane-note" style={{ borderTop: 0 }}>{d.self ? "Our own token is drawn as a plain holder list: no links and no groups, so every bubble stands alone." : "No two of the top holders share a funder, fund each other or passed tokens between them, and no group bought together. That is as clean as a holder list gets."}</p>;
   return (
     <>
       {d.clusters.length > 0 && <p className="micro" style={{ padding: "16px 16px 8px" }}>Linked wallets</p>}
@@ -469,8 +469,8 @@ export function MapScreen({ mint, initial }: { mint: string; initial: MapResult 
               <MapCanvas data={data} pick={pick} onPick={setPick} layers={layers} fitSignal={fit} />
               <div className="tools">
                 <div className="seg" role="group" aria-label="Layers">
-                  <button aria-pressed={layers.links} onClick={() => setLayers((l) => ({ ...l, links: !l.links }))}>Links</button>
-                  <button aria-pressed={layers.cohorts} onClick={() => setLayers((l) => ({ ...l, cohorts: !l.cohorts }))}>Cohorts</button>
+                  {data.edges.length > 0 && <button aria-pressed={layers.links} onClick={() => setLayers((l) => ({ ...l, links: !l.links }))}>Links</button>}
+                  {data.cohorts.some((c) => c.confidence !== "low") && <button aria-pressed={layers.cohorts} onClick={() => setLayers((l) => ({ ...l, cohorts: !l.cohorts }))}>Cohorts</button>}
                   <button aria-pressed={layers.labels} onClick={() => setLayers((l) => ({ ...l, labels: !l.labels }))}>Labels</button>
                 </div>
                 <div className="seg" role="group" aria-label="Zoom">
@@ -479,12 +479,14 @@ export function MapScreen({ mint, initial }: { mint: string; initial: MapResult 
                   <button className="ico" onClick={() => setFit((n) => n + 1)} aria-label="Fit to view"><Fit size={14} /></button>
                 </div>
               </div>
-              <div className="legend" aria-hidden>
-                <span><i className="swatch" />linked, tap for proof</span>
-                {data.edges.some((e) => e.type === "transfer") && <span><i className="swatch dash" />tokens passed</span>}
-                {data.edges.some((e) => e.type === "batch") && <span><i className="swatch dot" />exchange batch</span>}
-                {data.cohorts.some((c) => c.confidence !== "low") && <span><i className="swatch ring" />bought together</span>}
-              </div>
+              {(data.edges.length > 0 || data.cohorts.some((c) => c.confidence !== "low")) && (
+                <div className="legend" aria-hidden>
+                  {data.edges.length > 0 && <span><i className="swatch" />linked, tap for proof</span>}
+                  {data.edges.some((e) => e.type === "transfer") && <span><i className="swatch dash" />tokens passed</span>}
+                  {data.edges.some((e) => e.type === "batch") && <span><i className="swatch dot" />exchange batch</span>}
+                  {data.cohorts.some((c) => c.confidence !== "low") && <span><i className="swatch ring" />bought together</span>}
+                </div>
+              )}
             </>
           )}
           {scanning && data && stage && <LivePill stage={stage} live={live} />}
@@ -499,7 +501,7 @@ export function MapScreen({ mint, initial }: { mint: string; initial: MapResult 
               <div className="tabs" role="tablist">
                 <button role="tab" aria-selected={tab === "score"} onClick={() => setTab("score")}>Score</button>
                 <button role="tab" aria-selected={tab === "clusters"} onClick={() => setTab("clusters")}>
-                  Links<span className="ct num">{data.clusters.length + data.cohorts.length}</span>
+                  Links{data.clusters.length + data.cohorts.length > 0 && <span className="ct num">{data.clusters.length + data.cohorts.length}</span>}
                 </button>
                 <button role="tab" aria-selected={tab === "holders"} onClick={() => setTab("holders")}>
                   Holders<span className="ct num">{data.nodes.filter((n) => n.rank).length}</span>
@@ -521,4 +523,3 @@ export function MapScreen({ mint, initial }: { mint: string; initial: MapResult 
     </div>
   );
 }
-
