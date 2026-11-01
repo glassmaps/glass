@@ -92,7 +92,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ mint: string }
           <div style={{ display: "flex", flexDirection: "column", gap: 10, paddingBottom: 6 }}>
             <div style={{ ...mono, fontSize: 16, color: m.complete === false ? BAND.concentrated[1] : BAND[m.score.band][1], textTransform: "uppercase", letterSpacing: 1.5 }}>{m.complete === false ? "Incomplete" : BAND[m.score.band][0]}</div>
             <div style={{ ...mono, fontSize: 16, color: "rgba(255,255,255,.48)" }}>
-              {`${m.clusters.reduce((s, c) => s + c.pct, 0).toFixed(1)}% linked · ${m.holdersTotal.toLocaleString("en-US")} holders`}
+              {m.self ? `${m.holdersTotal.toLocaleString("en-US")} holders` : `${m.clusters.reduce((s, c) => s + c.pct, 0).toFixed(1)}% linked · ${m.holdersTotal.toLocaleString("en-US")} holders`}
             </div>
           </div>
         </div>
