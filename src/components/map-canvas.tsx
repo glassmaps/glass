@@ -297,9 +297,10 @@ export function MapCanvas({
                   const showName = name && px >= 30;
                   const showRank = n.rank > 0 && px >= 13;
                   if (!showName && !showRank) return null;
-                  const max = Math.max(4, Math.floor((n.r * 1.7) / (5.6 / view.k)));
+                  const nameSize = Math.max(9.5, Math.min(15, n.r * 0.09));
+                  const max = Math.max(4, Math.floor((n.r * 1.7) / ((nameSize * 0.59) / view.k)));
                   const nm = name.length > max ? name.slice(0, max - 1) + "…" : name;
-                  const rs = Math.max(8, Math.min(18, n.r * 0.4));
+                  const rs = Math.max(8, Math.min(28, n.r * 0.4));
                   const ink = ring ? "var(--ink-3)" : "rgba(0,0,0,0.72)";
                   const mono = { fontFamily: "var(--font-mono)", fontStretch: "87.5%", pointerEvents: "none" } as const;
                   return (
@@ -310,7 +311,7 @@ export function MapCanvas({
                         </text>
                       )}
                       {showName && (
-                        <text x={n.x} y={n.y + rs * 0.85} dy="0.35em" textAnchor="middle" fontSize={9.5 / view.k} fill={ring ? "var(--ink-3)" : "rgba(0,0,0,0.6)"} style={mono}>
+                        <text x={n.x} y={n.y + rs * 0.85} dy="0.35em" textAnchor="middle" fontSize={nameSize / view.k} fill={ring ? "var(--ink-3)" : "rgba(0,0,0,0.6)"} style={mono}>
                           {nm}
                         </text>
                       )}

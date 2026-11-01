@@ -17,7 +17,7 @@ export function LaunchPanel({ d, setPick }: { d: MapResult; setPick: (p: Pick) =
   const people = l.wallets + (l.dev ? 1 : 0);
   const max = Math.max(...l.bySlot.map((s) => s.pct), 0.0001);
   return (
-    <section className="launch" aria-label="Launch window">
+    <section className={`launch${d.self ? " launch-own" : ""}`} aria-label="Launch window">
       <div className="launch-top">
         <span className="micro">Launch window</span>
         {l.createSig && (
